@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 
-export default function RootPage() {
-  // Langsung mengarahkan pengguna ke halaman dashboard utama
-  redirect('/');
+export default function Home() {
+  // Langsung arahkan pengguna ke halaman login
+  redirect('/login');
 }
