@@ -1,11 +1,16 @@
 'use client';
 
-import React, { useState } from 'react';
+export const dynamic = 'force-dynamic';
+
+import React, { useState, Suspense } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import CameraUploader from '@/components/camera/camera-uploader';
-import { Receipt, DollarSign, FileText, Send, CheckCircle2 } from 'lucide-react';
+import { Receipt, DollarSign, FileText, Send, CheckCircle2, Loader2 } from 'lucide-react';
 
-export default function PengeluaranPage() {
+// ---------------------------------------------------------------------
+// 1. Komponen Utama Form Pengeluaran
+// ---------------------------------------------------------------------
+function PengeluaranContent() {
   const [nominal, setNominal] = useState('');
   const [keterangan, setKeterangan] = useState('');
   const [fotoNota, setFotoNota] = useState<File | null>(null);
@@ -128,16 +133,43 @@ export default function PengeluaranPage() {
           <CameraUploader onImageCaptured={(file) => setFotoNota(file)} />
         </div>
 
-        {/* Submit Button (Target Touch 44px+) */}
+        {/* Submit Button */}
         <button
           type="submit"
           disabled={isSubmitting}
           className="w-full h-12 mt-2 bg-sky-600 hover:bg-sky-700 active:bg-sky-800 text-white font-semibold text-sm rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 shadow-md shadow-sky-600/20"
         >
-          <Send className="w-4 h-4" />
-          <span>{isSubmitting ? 'Mengunggah Data...' : 'Simpan Pengeluaran'}</span>
+          {isSubmitting ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Mengunggah Data...</span>
+            </>
+          ) : (
+            <>
+              <Send className="w-4 h-4" />
+              <span>Simpan Pengeluaran</span>
+            </>
+          )}
         </button>
       </form>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 2. Export Default Halaman Dibungkus Suspense (Penanganan Build Netlify)
+// ---------------------------------------------------------------------
+export default function PengeluaranPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center p-12 text-slate-400 gap-2">
+          <Loader2 className="w-5 h-5 animate-spin text-sky-600" />
+          <span className="text-xs">Memuat halaman pengeluaran...</span>
+        </div>
+      }
+    >
+      <PengeluaranContent />
+    </Suspense>
   );
 }
