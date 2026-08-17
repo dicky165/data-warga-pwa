@@ -17,8 +17,7 @@ import {
   AlertCircle,
   XCircle,
   UserCheck,
-  Crown,
-  Layers
+  Crown
 } from 'lucide-react';
 
 interface KelasIuranDetail {
@@ -64,6 +63,7 @@ interface PembayaranIuranDisplayItem {
   periode_tahun: number;
   created_at?: string;
   petugas_id?: string;
+  pencatat_by_id?: string;
   petugas?: { nama_lengkap: string };
   master_iuran?: { nama_iuran: string };
 }
@@ -137,7 +137,7 @@ function IuranContent() {
       
       if (dataIuran) setListMasterIuran(dataIuran as MasterIuranItem[]);
 
-      // 2. Fetch Kartu Keluarga dengan Fallback Query
+      // 2. Fetch Kartu Keluarga
       let { data: dataKK, error: errorKK } = await supabase
         .from('kartu_keluarga')
         .select(`
@@ -172,18 +172,26 @@ function IuranContent() {
         setListRT(rts);
       }
 
-      // 3. Fetch Data Pengurus
+      // 3. Fetch Data Pengurus & User Login
       const { data: dataPetugas } = await supabase
         .from('profil_pengurus')
         .select('id, nama_lengkap');
         
       const pengurusMap = new Map<string, string>();
-      if (dataPetugas) {
+      let defaultNamaPengurus = 'Petugas';
+
+      if (dataPetugas && dataPetugas.length > 0) {
         dataPetugas.forEach((p) => pengurusMap.set(p.id, p.nama_lengkap));
+        defaultNamaPengurus = dataPetugas[0].nama_lengkap; // Fallback ke pengurus pertama (Dicky Kostaman)
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && pengurusMap.has(user.id)) {
+        defaultNamaPengurus = pengurusMap.get(user.id)!;
       }
 
       // 4. Fetch Transaksi Pembayaran Iuran
-      const { data: dataPembayaran, error } = await supabase
+      const { data: dataPembayaran } = await supabase
         .from('pembayaran_iuran')
         .select(`
           id,
@@ -194,36 +202,24 @@ function IuranContent() {
           periode_tahun,
           created_at,
           petugas_id,
-          petugas:profil_pengurus!petugas_id ( nama_lengkap ),
+          pencatat_by_id,
           master_iuran ( nama_iuran )
         `)
         .order('created_at', { ascending: false });
 
-      if (error) {
-        const { data: fallbackPembayaran } = await supabase
-          .from('pembayaran_iuran')
-          .select(`
-            id,
-            id_iuran,
-            no_kk,
-            jumlah_bayar,
-            periode_bulan,
-            periode_tahun,
-            created_at,
-            petugas_id,
-            master_iuran ( nama_iuran )
-          `)
-          .order('created_at', { ascending: false });
+      if (dataPembayaran) {
+        const formattedData = dataPembayaran.map((item: any) => {
+          const targetId = item.petugas_id || item.pencatat_by_id;
+          const namaDitemukan = targetId ? pengurusMap.get(targetId) : null;
 
-        if (fallbackPembayaran) {
-          const formattedData = fallbackPembayaran.map((item: any) => ({
+          return {
             ...item,
-            petugas: item.petugas_id ? { nama_lengkap: pengurusMap.get(item.petugas_id) || 'Petugas' } : undefined
-          }));
-          setListPembayaran(formattedData as PembayaranIuranDisplayItem[]);
-        }
-      } else if (dataPembayaran) {
-        setListPembayaran(dataPembayaran as unknown as PembayaranIuranDisplayItem[]);
+            petugas: {
+              nama_lengkap: namaDitemukan || defaultNamaPengurus
+            }
+          };
+        });
+        setListPembayaran(formattedData as PembayaranIuranDisplayItem[]);
       }
     } catch (err) {
       console.error('Fetch error:', err);
@@ -251,12 +247,10 @@ function IuranContent() {
     return age;
   };
 
-  // Helper untuk mendapatkan list anggota warga dari KK
   const getAnggotaWarga = (kk: KartuKeluargaItem): WargaItem[] => {
     return kk.data_warga || kk.warga || [];
   };
 
-  // Helper mendapatkan Kepala Keluarga & Kelas Iuran Warga (A / B / C)
   const getKelasWarga = (kk: KartuKeluargaItem): { kepala: WargaItem | undefined; kelas: string } => {
     const listWarga = getAnggotaWarga(kk);
     const kepala = listWarga.find((w) => {
@@ -274,7 +268,6 @@ function IuranContent() {
     return { kepala, kelas };
   };
 
-  // Evaluasi Tarif Berdasarkan Kelas Iuran (A/B/C) & Kriteria
   const getTarifEfektifKK = (kk: KartuKeluargaItem, master: MasterIuranItem): { tarif: number; catatan: string } => {
     const listWarga = getAnggotaWarga(kk);
     const totalWarga = listWarga.length;
@@ -472,7 +465,6 @@ function IuranContent() {
 
   return (
     <div className="space-y-4 pb-20">
-      {/* Top Header */}
       <div className="flex items-center justify-between gap-2">
         <div>
           <h2 className="text-base font-bold text-slate-800">Status & Catatan Iuran</h2>
@@ -490,7 +482,6 @@ function IuranContent() {
         </button>
       </div>
 
-      {/* Control Filter & Search */}
       <div className="flex flex-col gap-2">
         <div className="relative w-full">
           <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
@@ -541,7 +532,6 @@ function IuranContent() {
         </div>
       </div>
 
-      {/* Main List */}
       {loading || !mounted ? (
         <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-2">
           <Loader2 className="w-6 h-6 animate-spin text-sky-600" />
@@ -563,7 +553,6 @@ function IuranContent() {
                 key={kk.no_kk}
                 className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-3"
               >
-                {/* Header KK + Badge Kelas Warga */}
                 <div className="flex justify-between items-start border-b border-slate-100 pb-3">
                   <div>
                     <button
@@ -599,7 +588,6 @@ function IuranContent() {
                   </div>
                 </div>
 
-                {/* List Item Iuran */}
                 <div className="space-y-2">
                   {kk.itemsIuran.map((iuran, index) => (
                     <div 
@@ -676,7 +664,6 @@ function IuranContent() {
                   ))}
                 </div>
 
-                {/* Footer Total Kekurangan */}
                 {kk.total_kekurangan > 0 && (
                   <div className="flex justify-between items-center pt-1 px-1 text-[11px]">
                     <span className="text-slate-400 font-medium">Sisa Kekurangan Bulan Ini:</span>
@@ -691,7 +678,6 @@ function IuranContent() {
         </div>
       )}
 
-      {/* Modal Form Catat Pembayaran */}
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex justify-center items-end sm:items-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl pb-8 sm:pb-5">
