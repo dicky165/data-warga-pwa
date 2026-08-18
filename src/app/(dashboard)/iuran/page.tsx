@@ -17,41 +17,57 @@ import {
   AlertCircle,
   XCircle,
   UserCheck,
-  Crown
+  Crown,
+  Calendar,
+  Wallet
 } from 'lucide-react';
 
-interface KelasIuranDetail {
-  nama_kelas: string;
+interface PilihanIuranDetail {
+  nama_pilihan?: string;
+  nama_kelas?: string;
   nominal: number;
 }
 
 interface MasterIuranItem {
   id: number;
+  id_wilayah?: number;
   nama_iuran: string;
   tarif_nominal?: number;
+  is_active?: boolean;
   min_usia?: number;
+  max_usia?: number;
   wajib_bekerja?: boolean;
-  kelas_iuran?: KelasIuranDetail[];
+  hanya_kepala_keluarga?: boolean;
+  kelas_iuran?: PilihanIuranDetail[];
+  pilihan_iuran?: PilihanIuranDetail[];
 }
 
 interface WargaItem {
+  nik?: string;
+  no_kk?: string;
   nama_lengkap: string;
   status_warga?: 'AKTIF' | 'MENINGGAL' | 'PINDAH';
   tanggal_lahir?: string;
+  pekerjaan?: string;
   status_pekerjaan?: string;
+  status_ekonomi?: string;
   shdk?: string;
   status_hubungan?: string;
   is_kepala?: boolean;
+  pilihan_iuran?: string;
   kelas_iuran?: string;
 }
 
 interface KartuKeluargaItem {
   no_kk: string;
+  id_wilayah?: number;
+  alamat?: string;
   nama_kepala_keluarga?: string;
+  pilihan_iuran?: string;
   kelas_iuran?: string;
   data_warga?: WargaItem[];
   warga?: WargaItem[];
-  wilayah_rt_rw?: { rt: string; rw: string; nama_kampung?: string };
+  wilayah_rt_rw?: { id?: number; rt: string; rw: string; nama_kampung?: string };
 }
 
 interface PembayaranIuranDisplayItem {
@@ -84,7 +100,6 @@ function IuranContent() {
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   
-  // State Filter
   const [filterRT, setFilterRT] = useState<string>('ALL');
   const [listRT, setListRT] = useState<string[]>([]);
   const [filterBulan, setFilterBulan] = useState<number>(1);
@@ -93,10 +108,12 @@ function IuranContent() {
   
   const [isModalOpen, setIsModalOpen] = useState(false);
 
+  // Form State
   const [formData, setFormData] = useState({
     id_iuran: '',
     no_kk: '',
-    jumlah_bayar: '',
+    tarif_per_bulan: '', // Tarif resmi per bulan
+    total_uang_diterima: '', // Total uang yang dibayarkan warga (Misal: 50.000 atau 10.000)
     periode_bulan: '1',
     periode_tahun: '2026'
   });
@@ -130,11 +147,12 @@ function IuranContent() {
       const supabase = createClient();
 
       // 1. Fetch Master Jenis Iuran
-      const { data: dataIuran } = await supabase
+      const { data: dataIuran, error: errorIuran } = await supabase
         .from('master_iuran')
-        .select('id, nama_iuran, tarif_nominal, min_usia, wajib_bekerja, kelas_iuran')
+        .select('*')
         .eq('is_active', true);
       
+      if (errorIuran) console.error('Error fetching master_iuran:', errorIuran.message);
       if (dataIuran) setListMasterIuran(dataIuran as MasterIuranItem[]);
 
       // 2. Fetch Kartu Keluarga
@@ -172,7 +190,7 @@ function IuranContent() {
         setListRT(rts);
       }
 
-      // 3. Fetch Data Pengurus & User Login
+      // 3. Fetch Profil Pengurus
       const { data: dataPetugas } = await supabase
         .from('profil_pengurus')
         .select('id, nama_lengkap');
@@ -182,7 +200,7 @@ function IuranContent() {
 
       if (dataPetugas && dataPetugas.length > 0) {
         dataPetugas.forEach((p) => pengurusMap.set(p.id, p.nama_lengkap));
-        defaultNamaPengurus = dataPetugas[0].nama_lengkap; // Fallback ke pengurus pertama (Dicky Kostaman)
+        defaultNamaPengurus = dataPetugas[0].nama_lengkap;
       }
 
       const { data: { user } } = await supabase.auth.getUser();
@@ -190,22 +208,13 @@ function IuranContent() {
         defaultNamaPengurus = pengurusMap.get(user.id)!;
       }
 
-      // 4. Fetch Transaksi Pembayaran Iuran
-      const { data: dataPembayaran } = await supabase
+      // 4. Fetch Transaksi Pembayaran
+      const { data: dataPembayaran, error: errorPembayaran } = await supabase
         .from('pembayaran_iuran')
-        .select(`
-          id,
-          id_iuran,
-          no_kk,
-          jumlah_bayar,
-          periode_bulan,
-          periode_tahun,
-          created_at,
-          petugas_id,
-          pencatat_by_id,
-          master_iuran ( nama_iuran )
-        `)
+        .select('*')
         .order('created_at', { ascending: false });
+
+      if (errorPembayaran) console.error('Error fetching pembayaran:', errorPembayaran.message);
 
       if (dataPembayaran) {
         const formattedData = dataPembayaran.map((item: any) => {
@@ -232,7 +241,7 @@ function IuranContent() {
     fetchData();
   }, [fetchData]);
 
-  // Hitung Usia
+  // Hitung Usia Warga
   const getUsia = (tanggalLahir?: string): number => {
     if (!tanggalLahir) return -1;
     const today = new Date();
@@ -251,21 +260,31 @@ function IuranContent() {
     return kk.data_warga || kk.warga || [];
   };
 
-  const getKelasWarga = (kk: KartuKeluargaItem): { kepala: WargaItem | undefined; kelas: string } => {
+  const getPilihanWarga = (kk: KartuKeluargaItem): { kepala: WargaItem | undefined; pilihan: string } => {
     const listWarga = getAnggotaWarga(kk);
     const kepala = listWarga.find((w) => {
       const shdk = (w.shdk || w.status_hubungan || '').toLowerCase();
       return shdk === 'kepala keluarga' || shdk === 'kepala' || w.is_kepala === true;
     });
 
-    const kelas = (
-      kepala?.kelas_iuran || 
+    const valStr = (
       kk.kelas_iuran || 
+      kk.pilihan_iuran || 
+      kepala?.status_ekonomi ||
+      kepala?.pilihan_iuran || 
+      kepala?.kelas_iuran || 
+      listWarga[0]?.status_ekonomi ||
+      listWarga[0]?.pilihan_iuran || 
       listWarga[0]?.kelas_iuran || 
       'B'
     ).toUpperCase();
 
-    return { kepala, kelas };
+    let pilihan = 'B';
+    if (valStr.includes('A')) pilihan = 'A';
+    else if (valStr.includes('C')) pilihan = 'C';
+    else if (valStr.includes('B')) pilihan = 'B';
+
+    return { kepala, pilihan };
   };
 
   const getTarifEfektifKK = (kk: KartuKeluargaItem, master: MasterIuranItem): { tarif: number; catatan: string } => {
@@ -279,12 +298,22 @@ function IuranContent() {
 
     const wargaAktif = listWarga.filter(w => w.status_warga !== 'MENINGGAL');
     
-    if (master.min_usia || master.wajib_bekerja) {
+    if (master.min_usia || master.max_usia || master.wajib_bekerja || master.hanya_kepala_keluarga) {
       const adaWargaMemenuhiKriteria = wargaAktif.some(w => {
         const usia = getUsia(w.tanggal_lahir);
         const minUsiaPass = master.min_usia ? (usia === -1 || usia >= master.min_usia) : true;
-        const bekerjaPass = master.wajib_bekerja ? (w.status_pekerjaan && w.status_pekerjaan.toLowerCase() !== 'tidak bekerja') : true;
-        return minUsiaPass && bekerjaPass;
+        const maxUsiaPass = master.max_usia ? (usia === -1 || usia <= master.max_usia) : true;
+
+        const strPekerjaan = (w.status_pekerjaan || w.pekerjaan || '').toLowerCase();
+        const bekerjaPass = master.wajib_bekerja 
+          ? (strPekerjaan !== '' && !strPekerjaan.includes('tidak bekerja') && !strPekerjaan.includes('belum')) 
+          : true;
+
+        const shdk = (w.shdk || w.status_hubungan || '').toLowerCase();
+        const isKepala = shdk.includes('kepala') || w.is_kepala === true;
+        const kepalaPass = master.hanya_kepala_keluarga ? isKepala : true;
+
+        return minUsiaPass && maxUsiaPass && bekerjaPass && kepalaPass;
       });
 
       if (!adaWargaMemenuhiKriteria && wargaAktif.length > 0) {
@@ -292,35 +321,96 @@ function IuranContent() {
       }
     }
 
-    const { kelas } = getKelasWarga(kk);
+    const { pilihan } = getPilihanWarga(kk);
     const tarifDefault = Number(master.tarif_nominal || 0);
 
-    if (Array.isArray(master.kelas_iuran) && master.kelas_iuran.length > 0) {
-      const matchKelas = master.kelas_iuran.find(
-        (k) => String(k.nama_kelas).toUpperCase() === kelas
-      );
+    const arrayPilihan = master.kelas_iuran || master.pilihan_iuran;
 
-      if (matchKelas && matchKelas.nominal !== undefined && matchKelas.nominal !== null) {
+    if (Array.isArray(arrayPilihan) && arrayPilihan.length > 0) {
+      const matchPilihan = arrayPilihan.find((k) => {
+        const key = String(k.nama_pilihan || k.nama_kelas || '').toUpperCase();
+        return key.includes(pilihan);
+      });
+
+      if (matchPilihan && matchPilihan.nominal !== undefined && matchPilihan.nominal !== null) {
         return {
-          tarif: Number(matchKelas.nominal),
-          catatan: `Kelas ${kelas}`
+          tarif: Number(matchPilihan.nominal),
+          catatan: `Pilihan ${pilihan}`
         };
       }
     }
 
-    return { tarif: tarifDefault, catatan: `Kelas ${kelas} (Default)` };
+    return { tarif: tarifDefault, catatan: `Pilihan ${pilihan} (Default)` };
   };
 
-  const handleOpenQuickPay = (noKk: string = '', idIuran: string = '', defaultNominal: number = 0) => {
+  const handleOpenQuickPay = (noKk: string = '', idIuran: string = '', defaultNominalBayar: number = 0) => {
+    let tarifPerBulanVal = defaultNominalBayar;
+
+    if (noKk && idIuran) {
+      const kkObj = listKK.find(k => k.no_kk === noKk);
+      const masterObj = listMasterIuran.find(m => String(m.id) === idIuran);
+      if (kkObj && masterObj) {
+        const { tarif } = getTarifEfektifKK(kkObj, masterObj);
+        tarifPerBulanVal = tarif;
+      }
+    }
+
     setFormData({
       id_iuran: idIuran,
       no_kk: noKk,
-      jumlah_bayar: defaultNominal > 0 ? String(defaultNominal) : '',
+      tarif_per_bulan: tarifPerBulanVal > 0 ? String(tarifPerBulanVal) : '',
+      total_uang_diterima: defaultNominalBayar > 0 ? String(defaultNominalBayar) : (tarifPerBulanVal > 0 ? String(tarifPerBulanVal) : ''),
       periode_bulan: String(filterBulan),
       periode_tahun: String(filterTahun)
     });
     setIsModalOpen(true);
   };
+
+  // Logika Kalkulasi Pecahan Distribusi Uang
+  const hitungDistribusiUang = () => {
+    const tarifNominal = parseFloat(formData.tarif_per_bulan) || 0;
+    const totalUang = parseFloat(formData.total_uang_diterima) || 0;
+    const startBulan = parseInt(formData.periode_bulan) || 1;
+    const startTahun = parseInt(formData.periode_tahun) || 2026;
+
+    if (tarifNominal <= 0 || totalUang <= 0) return [];
+
+    let sisaUang = totalUang;
+    let curBulan = startBulan;
+    let curTahun = startTahun;
+    const rincian: { bulan: number; tahun: number; nominalAlokasi: number; status: string }[] = [];
+
+    while (sisaUang > 0) {
+      let nominalAlokasi = 0;
+      let statusStr = 'LUNAS';
+
+      if (sisaUang >= tarifNominal) {
+        nominalAlokasi = tarifNominal;
+        sisaUang -= tarifNominal;
+      } else {
+        nominalAlokasi = sisaUang;
+        statusStr = `PARSIAL (Kurang Rp ${(tarifNominal - sisaUang).toLocaleString('id-ID')})`;
+        sisaUang = 0;
+      }
+
+      rincian.push({
+        bulan: curBulan,
+        tahun: curTahun,
+        nominalAlokasi,
+        status: statusStr
+      });
+
+      curBulan++;
+      if (curBulan > 12) {
+        curBulan = 1;
+        curTahun++;
+      }
+    }
+
+    return rincian;
+  };
+
+  const listAlokasi = hitungDistribusiUang();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -336,23 +426,33 @@ function IuranContent() {
         return;
       }
 
-      if (!formData.id_iuran || !formData.no_kk || !formData.jumlah_bayar) {
+      if (!formData.id_iuran || !formData.no_kk || !formData.total_uang_diterima) {
         alert('Mohon lengkapi semua kolom wajib!');
         setSaving(false);
         return;
       }
 
+      const alokasi = hitungDistribusiUang();
+      if (alokasi.length === 0) {
+        alert('Nominal uang yang dimasukkan tidak valid!');
+        setSaving(false);
+        return;
+      }
+
+      // Siapkan BATCH INSERT ke tabel pembayaran_iuran
+      const payloadBatch = alokasi.map((item) => ({
+        id_iuran: parseInt(formData.id_iuran),
+        no_kk: formData.no_kk,
+        jumlah_bayar: item.nominalAlokasi,
+        periode_bulan: item.bulan,
+        periode_tahun: item.tahun,
+        petugas_id: user.id,
+        pencatat_by_id: user.id
+      }));
+
       const { error } = await supabase
         .from('pembayaran_iuran')
-        .insert({
-          id_iuran: parseInt(formData.id_iuran),
-          no_kk: formData.no_kk,
-          jumlah_bayar: parseFloat(formData.jumlah_bayar),
-          periode_bulan: parseInt(formData.periode_bulan),
-          periode_tahun: parseInt(formData.periode_tahun),
-          petugas_id: user.id,
-          pencatat_by_id: user.id
-        });
+        .insert(payloadBatch);
 
       if (error) throw error;
 
@@ -360,7 +460,8 @@ function IuranContent() {
       setFormData({
         id_iuran: '',
         no_kk: '',
-        jumlah_bayar: '',
+        tarif_per_bulan: '',
+        total_uang_diterima: '',
         periode_bulan: String(filterBulan),
         periode_tahun: String(filterTahun)
       });
@@ -387,7 +488,7 @@ function IuranContent() {
 
   const reportData = listKK.map((kk) => {
     const listWarga = getAnggotaWarga(kk);
-    const { kepala, kelas } = getKelasWarga(kk);
+    const { kepala, pilihan } = getPilihanWarga(kk);
 
     const namaWarga = 
       kk.nama_kepala_keluarga || 
@@ -447,7 +548,7 @@ function IuranContent() {
     return {
       no_kk: kk.no_kk,
       nama_warga: namaWarga,
-      kelas_iuran: kelas,
+      pilihan_iuran: pilihan,
       wilayah_rt_rw: kk.wilayah_rt_rw,
       total_sudah_bayar: totalSudahBayarKK,
       total_kekurangan: totalKekuranganKK,
@@ -566,14 +667,14 @@ function IuranContent() {
                         <span className="text-slate-400 font-normal text-xs">{textWilayah}</span>
                         
                         <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md text-[10px] font-bold ${
-                          kk.kelas_iuran === 'A'
+                          kk.pilihan_iuran === 'A'
                             ? 'bg-purple-100 text-purple-700 border border-purple-200'
-                            : kk.kelas_iuran === 'B'
-                            ? 'bg-blue-100 text-blue-700 border border-blue-200'
-                            : 'bg-slate-100 text-slate-700 border border-slate-200'
+                            : kk.pilihan_iuran === 'C'
+                            ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                            : 'bg-blue-100 text-blue-700 border border-blue-200'
                         }`}>
-                          {kk.kelas_iuran === 'A' && <Crown className="w-2.5 h-2.5 text-amber-500" />}
-                          Kelas {kk.kelas_iuran}
+                          {kk.pilihan_iuran === 'A' && <Crown className="w-2.5 h-2.5 text-amber-500" />}
+                          Pilihan {kk.pilihan_iuran}
                         </span>
                       </h3>
                     </button>
@@ -631,6 +732,7 @@ function IuranContent() {
                             type="button"
                             onClick={() => handleOpenQuickPay(kk.no_kk, String(iuran.master_id), iuran.sisa_kekurangan)}
                             className="flex items-center gap-1 text-amber-600 font-bold bg-amber-100/70 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all active:scale-95 cursor-pointer"
+                            title="Klik untuk melunasi kekurangan"
                           >
                             <AlertCircle className="w-3.5 h-3.5" />
                             <span>Kurang Rp {iuran.sisa_kekurangan.toLocaleString('id-ID')}</span>
@@ -678,11 +780,12 @@ function IuranContent() {
         </div>
       )}
 
+      {/* Modal Form Pembayaran */}
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex justify-center items-end sm:items-center p-0 sm:p-4">
-          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl pb-8 sm:pb-5">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl pb-8 sm:pb-5 max-h-[90vh] overflow-y-auto">
             
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 sticky top-0 bg-white z-10">
               <h3 className="text-sm font-bold text-slate-800">Catat Pembayaran Iuran</h3>
               <button
                 type="button"
@@ -715,7 +818,8 @@ function IuranContent() {
                     setFormData(prev => ({
                       ...prev,
                       no_kk: nextNoKk,
-                      jumlah_bayar: nominalNom > 0 ? String(nominalNom) : prev.jumlah_bayar
+                      tarif_per_bulan: nominalNom > 0 ? String(nominalNom) : prev.tarif_per_bulan,
+                      total_uang_diterima: nominalNom > 0 ? String(nominalNom) : prev.total_uang_diterima
                     }));
                   }}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium"
@@ -723,12 +827,12 @@ function IuranContent() {
                   <option value="">-- Pilih Kartu Keluarga --</option>
                   {listKK.map((kk) => {
                     const listWarga = getAnggotaWarga(kk);
-                    const { kepala, kelas } = getKelasWarga(kk);
+                    const { kepala, pilihan } = getPilihanWarga(kk);
                     const nama = kk.nama_kepala_keluarga || kepala?.nama_lengkap || listWarga[0]?.nama_lengkap || 'Warga';
                     const rt = kk.wilayah_rt_rw?.rt ? `(RT ${kk.wilayah_rt_rw.rt})` : '';
                     return (
                       <option key={kk.no_kk} value={kk.no_kk}>
-                        {nama} {rt} [Kelas {kelas}] - KK: {kk.no_kk}
+                        {nama} {rt} [Pilihan {pilihan}] - KK: {kk.no_kk}
                       </option>
                     );
                   })}
@@ -756,7 +860,8 @@ function IuranContent() {
                     setFormData(prev => ({ 
                       ...prev, 
                       id_iuran: selectedId,
-                      jumlah_bayar: nominalDefault > 0 ? String(nominalDefault) : prev.jumlah_bayar
+                      tarif_per_bulan: nominalDefault > 0 ? String(nominalDefault) : prev.tarif_per_bulan,
+                      total_uang_diterima: nominalDefault > 0 ? String(nominalDefault) : prev.total_uang_diterima
                     }));
                   }}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium"
@@ -770,24 +875,11 @@ function IuranContent() {
                 </select>
               </div>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                  Jumlah Bayar (Rp) *
-                </label>
-                <input
-                  type="number"
-                  required
-                  placeholder="Contoh: 50000"
-                  value={formData.jumlah_bayar}
-                  onChange={(e) => setFormData({ ...formData, jumlah_bayar: e.target.value })}
-                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none font-semibold text-slate-800"
-                />
-              </div>
-
+              {/* Mulai Periode Pembayaran */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Periode Bulan *
+                    Mulai Periode Bulan *
                   </label>
                   <select
                     value={formData.periode_bulan}
@@ -802,7 +894,7 @@ function IuranContent() {
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Periode Tahun *
+                    Tahun *
                   </label>
                   <input
                     type="number"
@@ -814,9 +906,99 @@ function IuranContent() {
                 </div>
               </div>
 
+              {/* Tarif Per Bulan vs Total Uang Diterima */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Tarif Resmi / Bln (Rp)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="20000"
+                    value={formData.tarif_per_bulan}
+                    onChange={(e) => setFormData({ ...formData, tarif_per_bulan: e.target.value })}
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50 font-semibold text-slate-700 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-sky-700 mb-1">
+                    Total Uang Diterima (Rp) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="Misal: 50000 atau 10000"
+                    value={formData.total_uang_diterima}
+                    onChange={(e) => setFormData({ ...formData, total_uang_diterima: e.target.value })}
+                    className="w-full px-3 py-2.5 border-2 border-sky-400 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none font-bold text-slate-900 bg-sky-50/30"
+                  />
+                </div>
+              </div>
+
+              {/* Preset Tombol Cepat Jumlah Bulan */}
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                  Preset Cepat (Kelipatan Tarif):
+                </label>
+                <div className="flex gap-2">
+                  {[1, 2, 3, 6, 12].map((m) => {
+                    const tarif = parseFloat(formData.tarif_per_bulan) || 0;
+                    const val = tarif * m;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => {
+                          if (tarif > 0) {
+                            setFormData({ ...formData, total_uang_diterima: String(val) });
+                          }
+                        }}
+                        className="flex-1 py-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-sky-50 hover:border-sky-300 text-[10px] font-semibold text-slate-600 transition-all"
+                      >
+                        {m === 12 ? '1 Thn' : `${m} Bln`}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Box Rincian Alokasi Distribusi Uang */}
+              {listAlokasi.length > 0 && (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-2">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 border-b border-slate-200 pb-1.5">
+                    <span className="flex items-center gap-1">
+                      <Wallet className="w-3.5 h-3.5 text-sky-600" /> Rincian Alokasi Uang:
+                    </span>
+                    <span className="text-sky-700">{listAlokasi.length} Periode Bulan</span>
+                  </div>
+
+                  <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+                    {listAlokasi.map((item, idx) => (
+                      <div key={idx} className="flex justify-between items-center text-[10px]">
+                        <span className="font-semibold text-slate-600">
+                          {BULAN_LIST[item.bulan - 1]} {item.tahun}
+                        </span>
+                        <div className="text-right">
+                          <span className="font-bold text-slate-800">
+                            Rp {item.nominalAlokasi.toLocaleString('id-ID')}
+                          </span>
+                          <span className={`ml-1.5 font-semibold ${
+                            item.status.includes('PARSIAL') ? 'text-amber-600' : 'text-emerald-600'
+                          }`}>
+                            ({item.status})
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
             </form>
 
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2 sticky bottom-0 bg-white">
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
@@ -831,7 +1013,7 @@ function IuranContent() {
                 className="w-1/2 py-3 bg-sky-600 text-white rounded-xl text-xs font-semibold hover:bg-sky-700 flex items-center justify-center gap-1.5 shadow-md shadow-sky-600/20 active:scale-95 transition-all disabled:opacity-50"
               >
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                <span>Simpan Bayar</span>
+                <span>Simpan Pembayaran</span>
               </button>
             </div>
 

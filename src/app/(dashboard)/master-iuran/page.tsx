@@ -43,6 +43,7 @@ interface MasterIuranItem {
   tarif_nominal: number;
   is_active: boolean;
   min_usia?: number | null;
+  max_usia?: number | null;
   wajib_bekerja?: boolean;
   kelas_iuran?: KelasIuranItem[] | null;
   wilayah_rt_rw?: {
@@ -70,6 +71,7 @@ export default function MasterIuranPage() {
     id_wilayah: '',
     is_active: true,
     min_usia: '',
+    max_usia: '',
     wajib_bekerja: false,
     kelas_iuran: [
       { nama_kelas: 'A', nominal: 0 },
@@ -92,6 +94,7 @@ export default function MasterIuranPage() {
           tarif_nominal,
           is_active,
           min_usia,
+          max_usia,
           wajib_bekerja,
           kelas_iuran,
           wilayah_rt_rw ( id, rt, rw )
@@ -122,7 +125,7 @@ export default function MasterIuranPage() {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // EXPORT ENGINE (Penanggung Jawab / Kepala Keluarga Saja)
+  // EXPORT ENGINE
   // ---------------------------------------------------------------------------
   const prepareExportData = async () => {
     try {
@@ -144,10 +147,8 @@ export default function MasterIuranPage() {
         const isKepala = warga.is_kepala === true || shdk === 'kepala keluarga' || shdk === 'kepala';
 
         if (!kkMap.has(keyKK)) {
-          // Inisialisasi KK baru dengan kandidat pertama
           kkMap.set(keyKK, warga);
         } else if (isKepala) {
-          // Prioritaskan warga yang bertindak sebagai Kepala Keluarga/Penanggung Jawab
           kkMap.set(keyKK, warga);
         }
       });
@@ -169,7 +170,7 @@ export default function MasterIuranPage() {
 
       if (errPembayaran) throw new Error(`Tabel pembayaran_iuran: ${errPembayaran.message}`);
 
-      // 5. Ambil Profil Pengurus untuk mencatat nama penagih
+      // 5. Ambil Profil Pengurus
       const { data: dataPengurus } = await supabase
         .from('profil_pengurus')
         .select('*');
@@ -181,7 +182,7 @@ export default function MasterIuranPage() {
         ])
       );
 
-      // 6. Matriks Rekap: 1 Baris Per Kepala Keluarga / Penanggung Jawab
+      // 6. Matriks Rekap
       const rows = penanggungJawabList.map((warga: any, index: number) => {
         const rowObj: any = {
           no: index + 1,
@@ -189,7 +190,6 @@ export default function MasterIuranPage() {
           no_kk: warga.no_kk || '-'
         };
 
-        // Rekap Status Iuran per Master Jenis Iuran berdasarkan No KK
         masterIuran?.forEach((iuran: any) => {
           const logBayar = pembayaran?.find(
             (p: any) =>
@@ -288,7 +288,7 @@ export default function MasterIuranPage() {
   };
 
   // ---------------------------------------------------------------------------
-  // HANDLER KELAS IURAN (A / B / C)
+  // HANDLER PILIHAN IURAN (A / B / C)
   // ---------------------------------------------------------------------------
   const handleNominalKelasChange = (namaKelas: string, nominalStr: string) => {
     const val = parseFloat(nominalStr) || 0;
@@ -320,6 +320,7 @@ export default function MasterIuranPage() {
         id_wilayah: item.id_wilayah ? String(item.id_wilayah) : '',
         is_active: item.is_active ?? true,
         min_usia: item.min_usia !== null && item.min_usia !== undefined ? String(item.min_usia) : '',
+        max_usia: item.max_usia !== null && item.max_usia !== undefined ? String(item.max_usia) : '',
         wajib_bekerja: item.wajib_bekerja ?? false,
         kelas_iuran: mergedKelas
       });
@@ -331,6 +332,7 @@ export default function MasterIuranPage() {
         id_wilayah: '',
         is_active: true,
         min_usia: '',
+        max_usia: '',
         wajib_bekerja: false,
         kelas_iuran: [
           { nama_kelas: 'A', nominal: 0 },
@@ -359,6 +361,7 @@ export default function MasterIuranPage() {
         id_wilayah: formData.id_wilayah ? parseInt(formData.id_wilayah) : null,
         is_active: formData.is_active,
         min_usia: formData.min_usia !== '' ? parseInt(formData.min_usia) : null,
+        max_usia: formData.max_usia !== '' ? parseInt(formData.max_usia) : null,
         wajib_bekerja: formData.wajib_bekerja,
         kelas_iuran: formData.kelas_iuran
       };
@@ -425,6 +428,7 @@ export default function MasterIuranPage() {
         {/* Action Button Group */}
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={handleExportExcel}
             disabled={exporting}
             className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-sm transition-all disabled:opacity-50"
@@ -434,6 +438,7 @@ export default function MasterIuranPage() {
           </button>
 
           <button
+            type="button"
             onClick={handleExportPDF}
             disabled={exporting}
             className="flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-xl shadow-sm transition-all disabled:opacity-50"
@@ -443,6 +448,7 @@ export default function MasterIuranPage() {
           </button>
 
           <button
+            type="button"
             onClick={() => handleOpenModal()}
             className="flex items-center gap-1.5 px-3 py-2 bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs rounded-xl shadow-sm transition-all"
           >
@@ -502,12 +508,14 @@ export default function MasterIuranPage() {
 
                 <div className="flex items-center gap-1">
                   <button
+                    type="button"
                     onClick={() => handleOpenModal(item)}
                     className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-all"
                   >
                     <Edit3 className="w-4 h-4" />
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleDelete(item.id)}
                     className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
                   >
@@ -518,10 +526,15 @@ export default function MasterIuranPage() {
 
               {/* Tag Kriteria & Syarat */}
               <div className="flex flex-wrap gap-1.5 text-[10px]">
-                {item.min_usia !== null && item.min_usia !== undefined ? (
+                {(item.min_usia !== null && item.min_usia !== undefined) || (item.max_usia !== null && item.max_usia !== undefined) ? (
                   <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 font-medium rounded-md border border-amber-200/60">
                     <UserCheck className="w-3 h-3 text-amber-600" />
-                    Min Usia: {item.min_usia} Thn
+                    {item.min_usia && item.max_usia 
+                      ? `Usia: ${item.min_usia} - ${item.max_usia} Thn`
+                      : item.min_usia 
+                      ? `Min Usia: ${item.min_usia} Thn`
+                      : `Max Usia: ${item.max_usia} Thn`
+                    }
                   </span>
                 ) : (
                   <span className="px-2 py-0.5 bg-slate-100 text-slate-500 font-medium rounded-md">
@@ -541,10 +554,10 @@ export default function MasterIuranPage() {
                 )}
               </div>
 
-              {/* Tampilan 3 Kelas Iuran A / B / C */}
+              {/* Tampilan 3 Pilihan Iuran A / B / C */}
               <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-100 text-[11px] space-y-1.5">
                 <span className="text-[10px] font-bold text-slate-500 flex items-center gap-1">
-                  <Layers className="w-3 h-3 text-sky-600" /> Tarif Kelas Warga (A / B / C):
+                  <Layers className="w-3 h-3 text-sky-600" /> Tarif Pilihan Warga (A / B / C):
                 </span>
                 <div className="grid grid-cols-3 gap-1.5">
                   {(['A', 'B', 'C'] as const).map((kelasKey) => {
@@ -566,7 +579,7 @@ export default function MasterIuranPage() {
                       >
                         <span className="text-[9px] font-bold flex items-center justify-center gap-0.5">
                           {kelasKey === 'A' && <Crown className="w-2.5 h-2.5 text-amber-600" />}
-                          Kelas {kelasKey}
+                          Pilihan {kelasKey}
                         </span>
                         <span className="text-[10px] font-bold text-emerald-600 mt-0.5">
                           Rp {nominalVal ? nominalVal.toLocaleString('id-ID') : '0'}
@@ -587,6 +600,7 @@ export default function MasterIuranPage() {
                 </span>
 
                 <button
+                  type="button"
                   onClick={() => handleToggleActive(item)}
                   className={`flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold transition-all ${
                     item.is_active
@@ -674,14 +688,14 @@ export default function MasterIuranPage() {
                 />
               </div>
 
-              {/* SECTION: TARIF BERDASARKAN KELAS IURAN WARGA (A / B / C) */}
+              {/* 1. SECTION: TARIF BERDASARKAN PILIHAN IURAN WARGA (A / B / C) */}
               <div className="bg-purple-50/50 p-3.5 rounded-2xl border border-purple-100 space-y-3">
                 <div>
                   <span className="text-[11px] font-bold text-purple-900 flex items-center gap-1">
-                    <Layers className="w-3.5 h-3.5 text-purple-600" /> Tarif Khusus Berdasarkan Kelas Warga (A / B / C)
+                    <Layers className="w-3.5 h-3.5 text-purple-600" /> Tarif Khusus Berdasarkan Pilihan Warga (A / B / C)
                   </span>
                   <p className="text-[10px] text-purple-700 mt-0.5">
-                    Tentukan tarif iuran spesifik sesuai kategori Kelas Warga.
+                    Tentukan tarif iuran spesifik sesuai kategori Pilihan Warga.
                   </p>
                 </div>
 
@@ -698,7 +712,7 @@ export default function MasterIuranPage() {
                       }`}
                     >
                       <label className="block text-[10px] font-bold text-slate-700 flex items-center justify-between">
-                        <span>Kelas {k.nama_kelas}</span>
+                        <span>Pilihan {k.nama_kelas}</span>
                         {k.nama_kelas === 'A' && <Crown className="w-3 h-3 text-amber-500" />}
                       </label>
                       <input
@@ -714,31 +728,46 @@ export default function MasterIuranPage() {
                 </div>
               </div>
 
-              {/* SECTION: KRITERIA & SYARAT WAJIB IURAN */}
+              {/* 2 & 3. SECTION: KRITERIA USIA & WARGA BEKERJA */}
               <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/60 space-y-3">
                 <span className="text-[11px] font-bold text-slate-700 block">
                   Kriteria Wajib Iuran (Aturan Pembebasan)
                 </span>
 
-                {/* Batas Usia Minimal */}
-                <div>
-                  <label className="block text-[10px] font-semibold text-slate-600 mb-1">
-                    Minimal Usia Wajib Iuran (Tahun)
-                  </label>
-                  <input
-                    type="number"
-                    placeholder="Kosongkan jika semua usia (Default)"
-                    value={formData.min_usia}
-                    onChange={(e) => setFormData({ ...formData, min_usia: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none font-medium bg-white"
-                  />
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    *Jika tidak diisi, maka iuran berlaku umum untuk seluruh usia.
-                  </p>
-                </div>
+                {/* 2. Batas Usia Minimal & Maksimal */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 mb-1">
+                      Minimal Usia (Tahun)
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="Contoh: 17"
+                      value={formData.min_usia}
+                      onChange={(e) => setFormData({ ...formData, min_usia: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none font-medium bg-white"
+                    />
+                  </div>
 
-                {/* Status Pekerjaan */}
-                <div className="flex items-center justify-between pt-1">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 mb-1">
+                      Maksimal Usia (Tahun)
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="Contoh: 60"
+                      value={formData.max_usia}
+                      onChange={(e) => setFormData({ ...formData, max_usia: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none font-medium bg-white"
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-400">
+                  *Jika kosong, berlaku umum untuk semua rentang usia.
+                </p>
+
+                {/* 3. Status Warga Sedang Bekerja */}
+                <div className="flex items-center justify-between pt-1 border-t border-slate-200/50">
                   <div>
                     <span className="text-[10px] font-semibold text-slate-600 block">
                       Khusus Warga Sedang Bekerja?
@@ -763,6 +792,7 @@ export default function MasterIuranPage() {
                 </div>
               </div>
 
+              {/* 4. WILAYAH SPESIFIK */}
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">
                   Wilayah Spesifik (Opsional)
@@ -781,6 +811,7 @@ export default function MasterIuranPage() {
                 </select>
               </div>
 
+              {/* 5. STATUS AKTIF / NONAKTIF */}
               <div className="flex items-center justify-between pt-2">
                 <span className="text-[11px] font-semibold text-slate-600">Status Aktifkan Iuran:</span>
                 <button
