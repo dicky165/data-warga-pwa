@@ -125,11 +125,52 @@ export default function MasterIuranPage() {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // EXPORT ENGINE
+  // EXPORT ENGINE (Penarikan Nama Petugas yang Tepat Berdasarkan Schema DB)
   // ---------------------------------------------------------------------------
   const prepareExportData = async () => {
     try {
-      // 1. Ambil Data Warga langsung dari tabel data_warga
+      const supabase = createClient();
+
+      // 1. Ambil Master Jenis Iuran
+      const { data: masterIuran, error: errMaster } = await supabase
+        .from('master_iuran')
+        .select('id, nama_iuran')
+        .order('id', { ascending: true });
+
+      if (errMaster) throw new Error(`Tabel master_iuran: ${errMaster.message}`);
+
+      // 2. Ambil Profil Pengurus (Sesuai dengan dashboard/iuran/page.tsx)
+      const { data: dataPetugas, error: errPetugas } = await supabase
+        .from('profil_pengurus')
+        .select('id, nama_lengkap');
+
+      if (errPetugas) {
+        console.warn('Gagal mengambil profil_pengurus:', errPetugas.message);
+      }
+
+      const pengurusMap = new Map<string, string>();
+      let defaultNamaPengurus = 'Petugas / Umum';
+
+      if (dataPetugas && dataPetugas.length > 0) {
+        dataPetugas.forEach((p: any) => {
+          if (p.id && p.nama_lengkap) {
+            // Lowercase & trim untuk menghindari perbedaan format UUID
+            pengurusMap.set(String(p.id).toLowerCase().trim(), p.nama_lengkap);
+          }
+        });
+        defaultNamaPengurus = dataPetugas[0].nama_lengkap;
+      }
+
+      // Ambil user auth yang sedang login (seperti di iuran/page.tsx)
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && user.id) {
+        const cleanUserId = String(user.id).toLowerCase().trim();
+        if (pengurusMap.has(cleanUserId)) {
+          defaultNamaPengurus = pengurusMap.get(cleanUserId)!;
+        }
+      }
+
+      // 3. Ambil Data Warga
       const { data: dataWarga, error: errWarga } = await supabase
         .from('data_warga')
         .select('*')
@@ -138,51 +179,53 @@ export default function MasterIuranPage() {
       if (errWarga) throw new Error(`Tabel data_warga: ${errWarga.message}`);
       if (!dataWarga || dataWarga.length === 0) throw new Error('Data warga kosong');
 
-      // 2. Kelompokkan Warga berdasarkan no_kk & tentukan Kepala Keluarga
+      // Kelompokkan Warga berdasarkan Kepala Keluarga (no_kk)
       const kkMap = new Map<string, any>();
-
       dataWarga.forEach((warga: any) => {
         const keyKK = (warga.no_kk || warga.nik || 'TANPA_KK').trim();
         const shdk = String(warga.shdk || warga.status_hubungan || '').toLowerCase();
         const isKepala = warga.is_kepala === true || shdk === 'kepala keluarga' || shdk === 'kepala';
 
-        if (!kkMap.has(keyKK)) {
-          kkMap.set(keyKK, warga);
-        } else if (isKepala) {
+        if (!kkMap.has(keyKK) || isKepala) {
           kkMap.set(keyKK, warga);
         }
       });
-
       const penanggungJawabList = Array.from(kkMap.values());
 
-      // 3. Ambil Master Iuran
-      const { data: masterIuran, error: errMaster } = await supabase
-        .from('master_iuran')
-        .select('id, nama_iuran')
-        .order('id', { ascending: true });
-
-      if (errMaster) throw new Error(`Tabel master_iuran: ${errMaster.message}`);
-
-      // 4. Ambil Log Pembayaran Iuran
+      // 4. Ambil Log Pembayaran
       const { data: pembayaran, error: errPembayaran } = await supabase
         .from('pembayaran_iuran')
         .select('*');
 
       if (errPembayaran) throw new Error(`Tabel pembayaran_iuran: ${errPembayaran.message}`);
 
-      // 5. Ambil Profil Pengurus
-      const { data: dataPengurus } = await supabase
-        .from('profil_pengurus')
-        .select('*');
+      // Helper untuk mendapatkan nama petugas dengan fallback ke defaultNamaPengurus
+      const getNamaPetugas = (lb: any) => {
+        const rawId = lb.petugas_id || lb.pencatat_by_id;
+        if (!rawId) return defaultNamaPengurus;
+        
+        const cleanId = String(rawId).toLowerCase().trim();
+        return pengurusMap.get(cleanId) || defaultNamaPengurus;
+      };
 
-      const pengurusMap = new Map(
-        dataPengurus?.map((p: any) => [
-          p.id || p.nik || p.id_pengurus || p.user_id,
-          p.nama_lengkap || p.nama
-        ])
-      );
+      // 5. Akumulasi Rekap Uang per Petugas
+      const rekapPetugasMap = new Map<string, number>();
+      pembayaran?.forEach((p: any) => {
+        const nominal = Number(p.jumlah_bayar || 0);
+        const namaPetugas = getNamaPetugas(p);
 
-      // 6. Matriks Rekap
+        const currentTotal = rekapPetugasMap.get(namaPetugas) || 0;
+        rekapPetugasMap.set(namaPetugas, currentTotal + nominal);
+      });
+
+      const rekapPetugasRows = Array.from(rekapPetugasMap.entries()).map(([namaPetugas, totalUang], idx) => ({
+        no: idx + 1,
+        nama_petugas: namaPetugas,
+        total_terkumpul: `Rp ${totalUang.toLocaleString('id-ID')}`,
+        raw_total: totalUang
+      }));
+
+      // 6. Matriks Rekap Utama Per Warga
       const rows = penanggungJawabList.map((warga: any, index: number) => {
         const rowObj: any = {
           no: index + 1,
@@ -191,19 +234,20 @@ export default function MasterIuranPage() {
         };
 
         masterIuran?.forEach((iuran: any) => {
-          const logBayar = pembayaran?.find(
+          const logBayar = pembayaran?.filter(
             (p: any) =>
               String(p.no_kk || '').trim() === String(warga.no_kk || '').trim() &&
               Number(p.id_iuran) === Number(iuran.id)
           );
 
-          if (logBayar) {
-            const nominal = `Rp ${Number(logBayar.jumlah_bayar).toLocaleString('id-ID')}`;
-            const idPencatat = logBayar.pencatat_by_id || logBayar.petugas_id || logBayar.id_pengurus;
-            const namaPenagih = pengurusMap.get(idPencatat);
-            const penagihInfo = namaPenagih ? ` (${namaPenagih})` : '';
+          if (logBayar && logBayar.length > 0) {
+            const rincianTransaksi = logBayar.map((lb: any) => {
+              const nominal = Number(lb.jumlah_bayar || 0);
+              const namaPenagih = getNamaPetugas(lb);
+              return `Rp ${nominal.toLocaleString('id-ID')} [Penerima: ${namaPenagih}]`;
+            }).join('; ');
 
-            rowObj[iuran.nama_iuran] = `${nominal}${penagihInfo}`;
+            rowObj[iuran.nama_iuran] = rincianTransaksi;
           } else {
             rowObj[iuran.nama_iuran] = 'Belum Bayar';
           }
@@ -212,7 +256,7 @@ export default function MasterIuranPage() {
         return rowObj;
       });
 
-      return { masterIuran: masterIuran || [], rows };
+      return { masterIuran: masterIuran || [], rows, rekapPetugasRows };
     } catch (error: any) {
       console.error('Export Error Detail:', error);
       alert(`Gagal menyiapkan data export: ${error.message}`);
@@ -226,16 +270,17 @@ export default function MasterIuranPage() {
       const rawData = await prepareExportData();
       if (!rawData) return;
 
-      const worksheet = XLSX.utils.json_to_sheet(rawData.rows);
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Rekap Iuran Warga');
 
-      const max_width = rawData.rows.reduce((w: any, r: any) => {
-        return Object.keys(r).map((key, i) => Math.max(w[i] || 15, String(r[key]).length + 3));
-      }, []);
-      worksheet['!cols'] = max_width.map((w: number) => ({ wch: w }));
+      // Sheet 1: Rekap Utama Warga
+      const worksheetWarga = XLSX.utils.json_to_sheet(rawData.rows);
+      XLSX.utils.book_append_sheet(workbook, worksheetWarga, 'Rekap Iuran Warga');
 
-      XLSX.writeFile(workbook, `Rekap_Iuran_Warga_${new Date().toISOString().split('T')[0]}.xlsx`);
+      // Sheet 2: Rekap Per Petugas
+      const worksheetPetugas = XLSX.utils.json_to_sheet(rawData.rekapPetugasRows);
+      XLSX.utils.book_append_sheet(workbook, worksheetPetugas, 'Rekap Total per Petugas');
+
+      XLSX.writeFile(workbook, `Rekap_Iuran_Lengkap_${new Date().toISOString().split('T')[0]}.xlsx`);
     } catch (err: any) {
       alert(`Gagal membuat berkas Excel: ${err.message}`);
     } finally {
@@ -251,6 +296,7 @@ export default function MasterIuranPage() {
 
       const doc = new jsPDF({ orientation: 'landscape' });
 
+      // Title
       doc.setFontSize(14);
       doc.text('REKAPITULASI PEMBAYARAN IURAN WARGA', 14, 15);
       doc.setFontSize(9);
@@ -270,16 +316,45 @@ export default function MasterIuranPage() {
         ...rawData.masterIuran.map((m) => row[m.nama_iuran])
       ]);
 
+      // Tabel Utama Warga
       autoTable(doc, {
         startY: 25,
         head: [tableHeaders],
         body: tableBody,
-        styles: { fontSize: 8, cellPadding: 2 },
+        styles: { fontSize: 7, cellPadding: 2 },
         headStyles: { fillColor: [2, 132, 199] },
         alternateRowStyles: { fillColor: [248, 250, 252] }
       });
 
-      doc.save(`Rekap_Iuran_Warga_${new Date().toISOString().split('T')[0]}.pdf`);
+      // Spasi untuk Tabel Rekap Petugas
+      const finalY = (doc as any).lastAutoTable.finalY || 100;
+      if (finalY > 160) {
+        doc.addPage();
+      }
+
+      const startYPetugas = finalY > 160 ? 20 : finalY + 15;
+
+      doc.setFontSize(12);
+      doc.text('REKAPITULASI TOTAL UANG TERKUMPUL PER PETUGAS', 14, startYPetugas - 5);
+
+      const petugasHeaders = ['No', 'Nama Petugas / Pengambil Iuran', 'Total Uang Terkumpul'];
+      const petugasBody = rawData.rekapPetugasRows.map((rp: any) => [
+        rp.no,
+        rp.nama_petugas,
+        rp.total_terkumpul
+      ]);
+
+      // Tabel Rekap Petugas
+      autoTable(doc, {
+        startY: startYPetugas,
+        head: [petugasHeaders],
+        body: petugasBody,
+        styles: { fontSize: 8, cellPadding: 2.5 },
+        headStyles: { fillColor: [16, 185, 129] },
+        alternateRowStyles: { fillColor: [240, 253, 244] }
+      });
+
+      doc.save(`Rekap_Iuran_Lengkap_${new Date().toISOString().split('T')[0]}.pdf`);
     } catch (err: any) {
       alert(`Gagal membuat berkas PDF: ${err.message}`);
     } finally {
