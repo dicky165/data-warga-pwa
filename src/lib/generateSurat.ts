@@ -13,13 +13,50 @@ export interface DataSurat {
   desa: string;
   tglWafat?: string;
   sebabWafat?: string;
+
+  // Properti Pejabat RT & RW
+  namaKetuaRt?: string;
+  nama_ketua_rt?: string;
+  noHpKetuaRt?: string;
+  urlTtdKetuaRt?: string;
+  url_ttd_ketua_rt?: string;
+
+  namaKetuaRw?: string;
+  nama_ketua_rw?: string;
+  noHpKetuaRw?: string;
+  urlTtdKetuaRw?: string;
+  url_ttd_ketua_rw?: string;
 }
 
-export const cetakSuratPengantar = (data: DataSurat) => {
+const loadImage = (url?: string): Promise<HTMLImageElement | null> => {
+  return new Promise((resolve) => {
+    if (!url || !url.trim() || (!url.startsWith('http') && !url.startsWith('data:image'))) {
+      resolve(null);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+};
+
+export const cetakSuratPengantar = async (data: DataSurat) => {
   const doc = new jsPDF();
   const today = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
 
-  // Kop Surat Simple RT/RW
+  const namaRt = data.namaKetuaRt || data.nama_ketua_rt || '';
+  const namaRw = data.namaKetuaRw || data.nama_ketua_rw || '';
+  const ttdRtUrl = data.urlTtdKetuaRt || data.url_ttd_ketua_rt || '';
+  const ttdRwUrl = data.urlTtdKetuaRw || data.url_ttd_ketua_rw || '';
+
+  const [imgRt, imgRw] = await Promise.all([
+    loadImage(ttdRtUrl),
+    loadImage(ttdRwUrl)
+  ]);
+
+  // Kop Surat
   doc.setFont('times', 'bold');
   doc.setFontSize(12);
   doc.text(`RUKUN TETANGGA ${data.rt} RUKUN WARGA ${data.rw}`, 105, 15, { align: 'center' });
@@ -56,7 +93,7 @@ export const cetakSuratPengantar = (data: DataSurat) => {
     startY += 6;
   });
 
-  // Dynamic Keterangan Berdasarkan Jenis Surat
+  // Dynamic Keterangan
   startY += 4;
   if (data.jenisSurat === 'KEMATIAN') {
     doc.text('Bahwa nama tersebut di atas benar telah meninggal dunia pada:', 20, startY);
@@ -80,15 +117,34 @@ export const cetakSuratPengantar = (data: DataSurat) => {
     doc.text('di Rumah Sakit / Puskesmas.', 20, startY);
   }
 
-  // Tanda Tangan Block
-  const ttY = startY + 25;
-  doc.text(`Wilayah RT ${data.rt}, ${today}`, 130, ttY);
-  doc.text('Ketua RT', 35, ttY + 6);
-  doc.text('Ketua RW', 140, ttY + 6);
+  // --- BLOK TANDA TANGAN (PRESISI & RATA TENGAH) ---
+  const ttY = startY + 20;
+  const leftX = 55;   // Titik tengah kolom kiri (RT)
+  const rightX = 155; // Titik tengah kolom kanan (RW)
 
-  doc.text('( .................................... )', 25, ttY + 30);
-  doc.text('( .................................... )', 130, ttY + 30);
+  doc.setFont('times', 'normal');
+  // Tanggal sejajar tepat di atas "Ketua RW"
+  doc.text(`Wilayah RT ${data.rt}, ${today}`, rightX, ttY, { align: 'center' });
+  
+  // Jabatan RT & RW Rata Tengah
+  doc.text('Ketua RT', leftX, ttY + 6, { align: 'center' });
+  doc.text('Ketua RW', rightX, ttY + 6, { align: 'center' });
 
-  // Auto Download PDF
+  // Gambar TTD Terpasang Tepat di Tengah Kolom
+  if (imgRt) {
+    doc.addImage(imgRt, 'PNG', leftX - 17.5, ttY + 9, 35, 18);
+  }
+  if (imgRw) {
+    doc.addImage(imgRw, 'PNG', rightX - 17.5, ttY + 9, 35, 18);
+  }
+
+  // Nama Pejabat Cetak Tebal & Rata Tengah
+  doc.setFont('times', 'bold');
+  const labelRt = namaRt.trim() ? `( ${namaRt} )` : '( .................................... )';
+  const labelRw = namaRw.trim() ? `( ${namaRw} )` : '( .................................... )';
+
+  doc.text(labelRt, leftX, ttY + 32, { align: 'center' });
+  doc.text(labelRw, rightX, ttY + 32, { align: 'center' });
+
   doc.save(`Surat_${data.jenisSurat}_${data.namaWarga.replace(/\s+/g, '_')}.pdf`);
 };

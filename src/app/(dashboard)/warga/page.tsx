@@ -38,6 +38,12 @@ interface WilayahItem {
   nama_kampung: string;
   rw: string;
   rt: string;
+  nama_ketua_rt?: string;
+  no_hp_ketua_rt?: string;
+  url_ttd_ketua_rt?: string;
+  nama_ketua_rw?: string;
+  no_hp_ketua_rw?: string;
+  url_ttd_ketua_rw?: string;
 }
 
 interface AnggotaWarga {
@@ -59,6 +65,7 @@ interface AnggotaWarga {
   penyebab_wafat?: string;
   status_pekerjaan?: 'BEKERJA' | 'TIDAK_BEKERJA' | 'MENCARI_KERJA';
   status_ekonomi?: 'MAMPU' | 'TIDAK_MAMPU';
+  kelas_iuran?: string;
   created_at?: string;
 }
 
@@ -66,12 +73,30 @@ interface GroupKartuKeluarga {
   no_kk: string;
   alamat?: string;
   id_wilayah?: number;
-  kelas_iuran: string; // Stored in kartu_keluarga
+  kelas_iuran: string;
+  is_wajib_ronda?: boolean;
   nama_kampung?: string;
   rt?: string;
   rw?: string;
+  nama_ketua_rt?: string;
+  no_hp_ketua_rt?: string;
+  url_ttd_ketua_rt?: string;
+  nama_ketua_rw?: string;
+  no_hp_ketua_rw?: string;
+  url_ttd_ketua_rw?: string;
   anggota: AnggotaWarga[];
 }
+
+type JenisSuratPengantar = 
+  | 'KTP_KK'
+  | 'AKTA'
+  | 'SKCK'
+  | 'NIKAH_PINDAH'
+  | 'IZIN_KERAMAIAN'
+  | 'SKTM_UMKM'
+  | 'KEMATIAN'
+  | 'BELUM_BEKERJA'
+  | 'SKTM_BEROBAT';
 
 const SHDK_OPTIONS = [
   'Kepala Keluarga',
@@ -108,6 +133,7 @@ export default function WargaPage() {
   
   const [listGroupKK, setListGroupKK] = useState<GroupKartuKeluarga[]>([]);
   const [listWilayah, setListWilayah] = useState<WilayahItem[]>([]);
+  const [pengaturanAplikasi, setPengaturanAplikasi] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilterRT, setSelectedFilterRT] = useState<string>('ALL');
@@ -123,6 +149,7 @@ export default function WargaPage() {
     nama_lengkap: '',
     shdk: 'Kepala Keluarga',
     kelas_iuran: 'A',
+    is_wajib_ronda: false,
     no_whatsapp: '',
     id_wilayah: '',
     alamat: '',
@@ -139,14 +166,27 @@ export default function WargaPage() {
     status_ekonomi: 'MAMPU'
   });
 
-  const fetchWilayah = async () => {
+  const fetchPengaturan = async () => {
     const { data } = await supabase
+      .from('pengaturan_aplikasi')
+      .select('*')
+      .maybeSingle();
+
+    if (data) {
+      setPengaturanAplikasi(data);
+    }
+  };
+
+  const fetchWilayah = async () => {
+    const { data, error } = await supabase
       .from('wilayah_rt_rw')
-      .select('id, nama_kampung, rw, rt')
+      .select('*')
       .order('rw', { ascending: true })
       .order('rt', { ascending: true });
 
-    if (data) {
+    if (error) {
+      console.error('Error fetching wilayah:', error.message || error);
+    } else if (data) {
       setListWilayah(data as WilayahItem[]);
     }
   };
@@ -166,11 +206,9 @@ export default function WargaPage() {
         alamat,
         id_wilayah,
         kelas_iuran,
+        is_wajib_ronda,
         wilayah_rt_rw (
-          id,
-          nama_kampung,
-          rt,
-          rw
+          *
         ),
         data_warga (
           nik,
@@ -195,9 +233,14 @@ export default function WargaPage() {
         )
       `);
 
+    if (error) {
+      console.error('Error fetching data warga:', error.message || error);
+    }
+
     if (!error && data) {
       const mappedGroups: GroupKartuKeluarga[] = data.map((kk: any) => {
-        const wil = kk.wilayah_rt_rw;
+        // Antisipasi jika wilayah_rt_rw dikembalikan sebagai Array atau Object
+        const wil = Array.isArray(kk.wilayah_rt_rw) ? kk.wilayah_rt_rw[0] : kk.wilayah_rt_rw;
         const rawAnggota = (kk.data_warga || []) as AnggotaWarga[];
 
         const sortedAnggota = [...rawAnggota].sort((a, b) => {
@@ -239,8 +282,14 @@ export default function WargaPage() {
           id_wilayah: kk.id_wilayah,
           kelas_iuran: kk.kelas_iuran || 'A',
           nama_kampung: wil?.nama_kampung || '',
+          is_wajib_ronda: kk.is_wajib_ronda ?? false,
           rt: wil?.rt || '',
           rw: wil?.rw || '',
+          nama_ketua_rt: wil?.nama_ketua_rt || '',
+          no_hp_ketua_rt: wil?.no_hp_ketua_rt || '',
+          url_ttd_ketua_rt: wil?.url_ttd_ketua_rt || '',
+          nama_ketua_rw: wil?.nama_ketua_rw || '',
+          url_ttd_ketua_rw: wil?.url_ttd_ketua_rw || '',
           anggota: anggotaList
         };
       });
@@ -252,6 +301,7 @@ export default function WargaPage() {
   };
 
   useEffect(() => {
+    fetchPengaturan();
     fetchWilayah();
     fetchWarga();
   }, []);
@@ -276,7 +326,8 @@ export default function WargaPage() {
         no_kk: groupKK.no_kk,
         nama_lengkap: wargaEdit.nama_lengkap,
         shdk: wargaEdit.shdk || 'Anggota',
-        kelas_iuran: groupKK.kelas_iuran || 'A',
+        is_wajib_ronda: groupKK?.is_wajib_ronda ?? false,
+        kelas_iuran: wargaEdit.kelas_iuran || groupKK.kelas_iuran || 'A',
         no_whatsapp: wargaEdit.no_whatsapp,
         id_wilayah: groupKK.id_wilayah ? String(groupKK.id_wilayah) : '',
         alamat: groupKK.alamat || '',
@@ -301,6 +352,7 @@ export default function WargaPage() {
         nama_lengkap: '',
         shdk: isKKFirstMember ? 'Kepala Keluarga' : 'Anak',
         kelas_iuran: groupKK?.kelas_iuran || 'A',
+        is_wajib_ronda: groupKK?.is_wajib_ronda ?? false,
         no_whatsapp: '',
         id_wilayah: groupKK?.id_wilayah ? String(groupKK.id_wilayah) : (listWilayah.length > 0 ? String(listWilayah[0].id) : ''),
         alamat: groupKK?.alamat || '',
@@ -333,24 +385,23 @@ export default function WargaPage() {
         return;
       }
 
-      // Upsert Kartu Keluarga (Termasuk Simpan pilihan_iuran / kelas_iuran)
       const { error: errKK } = await supabase
         .from('kartu_keluarga')
         .upsert({
           no_kk: formData.no_kk,
           id_wilayah: selectedIdWilayah,
           alamat: formData.alamat || '',
-          kelas_iuran: formData.kelas_iuran
+          is_wajib_ronda: formData.is_wajib_ronda
         }, { onConflict: 'no_kk' });
 
       if (errKK) throw new Error(`Gagal simpan KK: ${errKK.message}`);
 
-      // Upsert Data Warga
       const payloadWarga: any = {
         nik: formData.nik,
         no_kk: formData.no_kk,
         nama_lengkap: formData.nama_lengkap,
         shdk: formData.shdk,
+        kelas_iuran: formData.kelas_iuran,
         no_whatsapp: formData.no_whatsapp || '',
         tempat_lahir: formData.tempat_lahir || null,
         tanggal_lahir: formData.tanggal_lahir || null,
@@ -405,8 +456,20 @@ export default function WargaPage() {
   const handleCetakSuratWarga = (
     warga: AnggotaWarga, 
     group: GroupKartuKeluarga, 
-    jenis: 'KEMATIAN' | 'BELUM_BEKERJA' | 'SKTM_BEROBAT'
+    jenis: JenisSuratPengantar
   ) => {
+    // Ambil data pejabat dari group KK atau fallback ke pengaturan aplikasi
+    const namaRt = group.nama_ketua_rt || pengaturanAplikasi?.nama_pejabat_rt || pengaturanAplikasi?.nama_pejabat || '';
+    const noHpRt = group.no_hp_ketua_rt || pengaturanAplikasi?.no_hp_pejabat_rt || pengaturanAplikasi?.no_hp_pejabat || '';
+    const ttdRt = group.url_ttd_ketua_rt || pengaturanAplikasi?.url_ttd_pejabat_rt || pengaturanAplikasi?.url_ttd_pejabat || '';
+
+    const namaRw = group.nama_ketua_rw || pengaturanAplikasi?.nama_pejabat_rw || pengaturanAplikasi?.nama_pejabat || '';
+    const noHpRw = pengaturanAplikasi?.no_hp_pejabat_rw || pengaturanAplikasi?.no_hp_pejabat || '';
+    const ttdRw = group.url_ttd_ketua_rw || pengaturanAplikasi?.url_ttd_pejabat_rw || pengaturanAplikasi?.url_ttd_pejabat || '';
+
+    // Cetak log ke console browser untuk memverifikasi data sebelum dicetak
+    console.log('Data Pejabat yang dikirim ke PDF:', { namaRt, ttdRt, namaRw, ttdRw });
+
     cetakSuratPengantar({
       jenisSurat: jenis,
       namaWarga: warga.nama_lengkap,
@@ -414,12 +477,35 @@ export default function WargaPage() {
       noKK: group.no_kk,
       ttl: `${warga.tempat_lahir || '-'}${warga.tanggal_lahir ? ', ' + warga.tanggal_lahir : ''}`,
       alamat: group.alamat || '-',
-      rt: group.rt || '01',
-      rw: group.rw || '01',
-      desa: group.nama_kampung || 'Sukasari',
+      rt: group.rt || '001',
+      rw: group.rw || '010',
+      desa: group.nama_kampung || pengaturanAplikasi?.nama_desa || 'KP. BALONG',
+
+      // Variasi nama properti Ketua RT
+      namaKetuaRt: namaRt,
+      nama_ketua_rt: namaRt,
+      namaRt: namaRt,
+      nama_rt: namaRt,
+      ketuaRt: namaRt,
+      namaPejabatRt: namaRt,
+
+      // Variasi nama properti Ketua RW
+      namaKetuaRw: namaRw,
+      nama_ketua_rw: namaRw,
+      namaRw: namaRw,
+      nama_rw: namaRw,
+      ketuaRw: namaRw,
+      namaPejabatRw: namaRw,
+
+      // TTD & No HP
+      urlTtdKetuaRt: ttdRt,
+      url_ttd_ketua_rt: ttdRt,
+      urlTtdKetuaRw: ttdRw,
+      url_ttd_ketua_rw: ttdRw,
+
       tglWafat: warga.tanggal_wafat,
       sebabWafat: warga.penyebab_wafat
-    });
+    } as any);
   };
 
   const filteredGroups = listGroupKK.filter((group) => {
@@ -449,7 +535,7 @@ export default function WargaPage() {
         const u = hitungUmur(warga.tanggal_lahir);
         exportData.push({
           'No. KK': group.no_kk,
-          'Pilihan Iuran KK': `Pilihan ${group.kelas_iuran || 'A'}`,
+          'Pilihan Iuran KK': `Pilihan ${warga.kelas_iuran || group.kelas_iuran || 'A'}`,
           'Nama Lengkap': warga.nama_lengkap,
           'SHDK': warga.shdk || 'Anggota',
           'NIK': warga.nik,
@@ -544,14 +630,14 @@ export default function WargaPage() {
             Data Penduduk & Kartu Keluarga
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Kelola data Kartu Keluarga, anggota warga, pilihan tarif iuran KK, hingga cetak surat pengantar
+            Kelola data Kartu Keluarga, anggota warga, pilihan tarif iuran KK, hingga cetak surat pengantar RT/RW
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={handleExportExcel}
-            className="px-3 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all"
+            className="px-3 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
             <span>Excel</span>
@@ -559,7 +645,7 @@ export default function WargaPage() {
 
           <button
             onClick={handleExportPDF}
-            className="px-3 py-2 bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all"
+            className="px-3 py-2 bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
           >
             <FileText className="w-4 h-4 text-rose-600" />
             <span>PDF</span>
@@ -567,7 +653,7 @@ export default function WargaPage() {
 
           <button
             onClick={() => handleOpenModal()}
-            className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-sky-600/20 active:scale-95 transition-all"
+            className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-sky-600/20 active:scale-95 transition-all cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Tambah KK / Warga</span>
@@ -592,7 +678,7 @@ export default function WargaPage() {
           <select
             value={selectedFilterRT}
             onChange={(e) => setSelectedFilterRT(e.target.value)}
-            className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-sky-500 shadow-sm"
+            className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-sky-500 shadow-sm cursor-pointer"
           >
             <option value="ALL">Semua Wilayah RT</option>
             {listWilayah.map((wil) => (
@@ -648,6 +734,13 @@ export default function WargaPage() {
                         {group.kelas_iuran === 'A' && <Crown className="w-3 h-3 text-amber-600" />}
                         Pilihan {group.kelas_iuran || 'A'}
                       </span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                        group.is_wajib_ronda !== false
+                          ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
+                          : 'text-amber-800 bg-amber-50 border-amber-200'
+                      }`}>
+                        {group.is_wajib_ronda !== false ? 'Wajib Ronda' : 'Bebas Ronda'}
+                      </span>
                     </div>
 
                     <div className="flex items-center gap-3 text-[11px] text-slate-500 flex-wrap">
@@ -667,7 +760,7 @@ export default function WargaPage() {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleOpenModal(group.no_kk, undefined, group)}
-                      className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-medium flex items-center gap-1 shadow-2xs transition-all"
+                      className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-medium flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
                     >
                       <UserPlus className="w-3 h-3 text-sky-600" />
                       <span>Tambah Anggota</span>
@@ -675,7 +768,7 @@ export default function WargaPage() {
 
                     <button
                       onClick={() => toggleExpand(group.no_kk)}
-                      className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
+                      className="p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                     >
                       {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                     </button>
@@ -740,35 +833,36 @@ export default function WargaPage() {
                               </span>
                             </div>
 
-                            {/* Actions Buttons */}
+                            {/* Actions Buttons / Surat Menyurat Menu */}
                             <div className="flex items-center gap-1.5">
-                              {warga.status_warga === 'MENINGGAL' ? (
-                                <button
-                                  onClick={() => handleCetakSuratWarga(warga, group, 'KEMATIAN')}
-                                  className="px-2 py-0.5 bg-rose-600 text-white rounded text-[9px] font-semibold hover:bg-rose-700 transition-all"
+                              {/* Menu Cetak Surat Menyurat RT/RW */}
+                              <div className="relative">
+                                <select
+                                  onChange={(e) => {
+                                    if (e.target.value) {
+                                      handleCetakSuratWarga(warga, group, e.target.value as JenisSuratPengantar);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                  defaultValue=""
+                                  className="px-2 py-1 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded text-[10px] font-semibold transition-all focus:outline-none cursor-pointer"
                                 >
-                                  Surat Kematian
-                                </button>
-                              ) : (
-                                <>
-                                  <button
-                                    onClick={() => handleCetakSuratWarga(warga, group, 'BELUM_BEKERJA')}
-                                    className="px-2 py-0.5 bg-amber-600 text-white rounded text-[9px] font-semibold hover:bg-amber-700 transition-all"
-                                  >
-                                    Belum Bekerja
-                                  </button>
-                                  <button
-                                    onClick={() => handleCetakSuratWarga(warga, group, 'SKTM_BEROBAT')}
-                                    className="px-2 py-0.5 bg-purple-600 text-white rounded text-[9px] font-semibold hover:bg-purple-700 transition-all"
-                                  >
-                                    SKTM Berobat
-                                  </button>
-                                </>
-                              )}
+                                  <option value="" disabled>📜 Cetak Surat Pengantar RT/RW...</option>
+                                  <option value="KTP_KK">1. Pengantar KTP / KK Baru</option>
+                                  <option value="AKTA">2. Pengantar Akta Kelahiran / Kematian</option>
+                                  <option value="SKCK">3. Pengantar SKCK</option>
+                                  <option value="NIKAH_PINDAH">4. Pengantar Nikah / Pindah Domisili</option>
+                                  <option value="IZIN_KERAMAIAN">5. Pengantar Izin Keramaian / Kegiatan</option>
+                                  <option value="SKTM_UMKM">6. Pengantar SKTM / Domisili Usaha Mikro</option>
+                                  {warga.status_warga === 'MENINGGAL' && (
+                                    <option value="KEMATIAN">7. Surat Keterangan Kematian</option>
+                                  )}
+                                </select>
+                              </div>
 
                               <button
                                 onClick={() => handleOpenModal(group.no_kk, warga, group)}
-                                className="p-1 text-slate-500 hover:text-sky-600 hover:bg-slate-100 rounded transition-colors"
+                                className="p-1 text-slate-500 hover:text-sky-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
                                 title="Edit Anggota Warga"
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
@@ -776,7 +870,7 @@ export default function WargaPage() {
 
                               <button
                                 onClick={() => handleDeleteAnggota(warga.nik)}
-                                className="p-1 text-slate-500 hover:text-rose-600 hover:bg-slate-100 rounded transition-colors"
+                                className="p-1 text-slate-500 hover:text-rose-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
                                 title="Hapus Anggota"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -785,7 +879,7 @@ export default function WargaPage() {
                               {warga.no_whatsapp && (
                                 <button
                                   onClick={() => handleSendWA(warga.nama_lengkap, warga.no_whatsapp)}
-                                  className="p-1 text-emerald-600 hover:bg-emerald-50 rounded transition-colors"
+                                  className="p-1 text-emerald-600 hover:bg-emerald-50 rounded transition-colors cursor-pointer"
                                   title="Kirim WA"
                                 >
                                   <MessageSquare className="w-3.5 h-3.5" />
@@ -875,7 +969,7 @@ export default function WargaPage() {
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 transition-colors"
+                className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -893,7 +987,7 @@ export default function WargaPage() {
                     required
                     value={formData.shdk}
                     onChange={(e) => setFormData({ ...formData, shdk: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium text-slate-800"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium text-slate-800 cursor-pointer"
                   >
                     {SHDK_OPTIONS.map((opt) => (
                       <option key={opt} value={opt}>{opt}</option>
@@ -909,7 +1003,7 @@ export default function WargaPage() {
                     required
                     value={formData.kelas_iuran}
                     onChange={(e) => setFormData({ ...formData, kelas_iuran: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-bold text-purple-700"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-bold text-purple-700 cursor-pointer"
                   >
                     {PILIHAN_IURAN_OPTIONS.map((opt) => (
                       <option key={opt} value={opt}>Pilihan {opt}</option>
@@ -917,6 +1011,8 @@ export default function WargaPage() {
                   </select>
                 </div>
               </div>
+
+              
 
               {/* NIK & No KK */}
               <div className="grid grid-cols-2 gap-2">
@@ -973,7 +1069,7 @@ export default function WargaPage() {
                 <select
                   value={formData.status_warga}
                   onChange={(e) => setFormData({ ...formData, status_warga: e.target.value as any })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-semibold text-slate-800"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-semibold text-slate-800 cursor-pointer"
                 >
                   <option value="AKTIF">AKTIF (Masih Hidup & Tinggal di Wilayah)</option>
                   <option value="MENINGGAL">MENINGGAL (Meninggal Dunia)</option>
@@ -1008,7 +1104,7 @@ export default function WargaPage() {
                       </label>
                       <input
                         type="text"
-                        placeholder="Contoh: Sakit Sakit Tua / Lanjut Usia"
+                        placeholder="Contoh: Sakit Tua / Lanjut Usia"
                         value={formData.penyebab_wafat}
                         onChange={(e) => setFormData({ ...formData, penyebab_wafat: e.target.value })}
                         className="w-full px-2.5 py-1.5 border border-rose-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-rose-500"
@@ -1055,7 +1151,7 @@ export default function WargaPage() {
                   <select
                     value={formData.status_perkawinan}
                     onChange={(e) => setFormData({ ...formData, status_perkawinan: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium cursor-pointer"
                   >
                     <option value="">-- Pilih Status --</option>
                     <option value="Belum Kawin">Belum Kawin</option>
@@ -1072,7 +1168,7 @@ export default function WargaPage() {
                   <select
                     value={formData.agama}
                     onChange={(e) => setFormData({ ...formData, agama: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium cursor-pointer"
                   >
                     <option value="">-- Pilih Agama --</option>
                     <option value="Islam">Islam</option>
@@ -1094,7 +1190,7 @@ export default function WargaPage() {
                   <select
                     value={formData.status_pekerjaan}
                     onChange={(e) => setFormData({ ...formData, status_pekerjaan: e.target.value as any })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-semibold"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-semibold cursor-pointer"
                   >
                     <option value="BEKERJA">BEKERJA</option>
                     <option value="TIDAK_BEKERJA">TIDAK BEKERJA</option>
@@ -1125,7 +1221,7 @@ export default function WargaPage() {
                   <select
                     value={formData.status_ekonomi}
                     onChange={(e) => setFormData({ ...formData, status_ekonomi: e.target.value as any })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-semibold"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-semibold cursor-pointer"
                   >
                     <option value="MAMPU">MAMPU</option>
                     <option value="TIDAK_MAMPU">TIDAK MAMPU (SKTM)</option>
@@ -1139,7 +1235,7 @@ export default function WargaPage() {
                   <select
                     value={formData.golongan_darah}
                     onChange={(e) => setFormData({ ...formData, golongan_darah: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium cursor-pointer"
                   >
                     <option value="">-</option>
                     <option value="A">A</option>
@@ -1159,7 +1255,7 @@ export default function WargaPage() {
                   required
                   value={formData.id_wilayah}
                   onChange={(e) => setFormData({ ...formData, id_wilayah: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white font-medium cursor-pointer"
                 >
                   <option value="">-- Pilih Wilayah RT/RW --</option>
                   {listWilayah.map((w) => (
@@ -1199,11 +1295,42 @@ export default function WargaPage() {
               </div>
             </form>
 
+
+            {/* Status Tugas Ronda Warga (Model Toggle Switch / Slide) */}
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 sm:col-span-2">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-800">
+                    Wajib Ikut Ronda Night / Siskamling?
+                  </label>
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    {formData.is_wajib_ronda 
+                      ? 'Aktif — Keluarga ini masuk ke dalam jadwal ronda malam.' 
+                      : 'Nonaktif — Keluarga ini mendapat dispensasi / bebas ronda.'}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={formData.is_wajib_ronda}
+                  onClick={() => setFormData({ ...formData, is_wajib_ronda: !formData.is_wajib_ronda })}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 ${
+                    formData.is_wajib_ronda ? 'bg-sky-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                      formData.is_wajib_ronda ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
             <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2 flex-shrink-0">
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="w-1/2 py-3 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-50 transition-all"
+                className="w-1/2 py-3 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-50 transition-all cursor-pointer"
               >
                 Batal
               </button>
@@ -1211,7 +1338,7 @@ export default function WargaPage() {
                 type="submit"
                 form="warga-form"
                 disabled={saving}
-                className="w-1/2 py-3 bg-sky-600 text-white rounded-xl text-xs font-semibold hover:bg-sky-700 flex items-center justify-center gap-1.5 shadow-md shadow-sky-600/20 active:scale-95 transition-all"
+                className="w-1/2 py-3 bg-sky-600 text-white rounded-xl text-xs font-semibold hover:bg-sky-700 flex items-center justify-center gap-1.5 shadow-md shadow-sky-600/20 active:scale-95 transition-all cursor-pointer"
               >
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 <span>Simpan Data Warga</span>
