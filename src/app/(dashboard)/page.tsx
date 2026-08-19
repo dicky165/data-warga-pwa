@@ -13,7 +13,8 @@ import {
   Receipt, 
   Loader2,
   ChevronRight,
-  Users
+  Users,
+  Building2
 } from 'lucide-react';
 
 interface StatRT {
@@ -48,18 +49,28 @@ function DashboardContent() {
       setLoading(true);
 
       try {
-        // Inisialisasi Supabase di dalam handler/effect agar tidak gagal saat build static collection
         const supabase = createClient();
         const now = new Date();
         const currentMonth = now.getMonth() + 1;
         const currentYear = now.getFullYear();
 
         // ---------------------------------------------------------------------
-        // 1. Ambil Data Warga tanpa FK Join paksaan
+        // 1. Ambil Data Warga + Join kartu_keluarga & wilayah_rt_rw
         // ---------------------------------------------------------------------
         const { data: dataWarga, error: errWarga } = await supabase
           .from('data_warga')
-          .select('*');
+          .select(`
+            *,
+            kartu_keluarga (
+              no_kk,
+              id_wilayah,
+              wilayah_rt_rw (
+                rt,
+                rw,
+                nama_kampung
+              )
+            )
+          `);
 
         if (errWarga) {
           throw new Error(`Error Data Warga: ${errWarga.message || JSON.stringify(errWarga)}`);
@@ -104,7 +115,7 @@ function DashboardContent() {
         }
 
         // ---------------------------------------------------------------------
-        // 4. Olah Sebaran RT & Demografi Warga Lengkap
+        // 4. Olah Sebaran RT & Demografi Warga
         // ---------------------------------------------------------------------
         if (dataWarga) {
           const mapRT: { [key: string]: StatRT } = {};
@@ -112,8 +123,16 @@ function DashboardContent() {
           const uniqueKKSet = new Set<string>();
 
           dataWarga.forEach((warga: any) => {
-            const rtVal = String(warga.rt || warga.id_rt || '01').padStart(2, '0');
-            const rwVal = String(warga.rw || warga.id_rw || '010').padStart(3, '0');
+            // EKSTRAKSI RT & RW DARI RELASI TABEL KARTU KELUARGA / WILAYAH
+            const wil = Array.isArray(warga.kartu_keluarga?.wilayah_rt_rw) 
+              ? warga.kartu_keluarga?.wilayah_rt_rw[0] 
+              : warga.kartu_keluarga?.wilayah_rt_rw;
+
+            const rawRT = warga.rt || warga.id_rt || wil?.rt || '01';
+            const rawRW = warga.rw || warga.id_rw || wil?.rw || '010';
+
+            const rtVal = String(rawRT).padStart(2, '0');
+            const rwVal = String(rawRW).padStart(3, '0');
             const key = `RT_${rtVal}_RW_${rwVal}`;
 
             if (rwVal) detectedRW = rwVal;
@@ -136,11 +155,10 @@ function DashboardContent() {
             }
 
             const stat = mapRT[key];
-            const noKK = String(warga.no_kk || '').trim();
+            const noKK = String(warga.no_kk || warga.kartu_keluarga?.no_kk || '').trim();
             const shdk = String(warga.shdk || warga.status_hubungan || '').toLowerCase();
             const isKepala = warga.is_kepala === true || shdk.includes('kepala');
 
-            // Hitung Total KK
             if (isKepala) {
               stat.totalKK += 1;
             }
@@ -148,19 +166,16 @@ function DashboardContent() {
               uniqueKKSet.add(noKK);
             }
 
-            // Tambahkan nominal bayar jika warga ini Kepala Keluarga
             if (isKepala && noKK && mapTotalBayarPerKK[noKK]) {
               stat.totalKasMasuk += mapTotalBayarPerKK[noKK];
             }
 
-            // Status Keberadaan / Kematian Warga
             const statusWarga = String(warga.status_warga || '').toLowerCase();
             if (statusWarga === 'wafat' || statusWarga === 'meninggal' || warga.tanggal_wafat) {
               stat.kematian += 1;
             } else {
               stat.totalWarga += 1;
 
-              // Status Perkawinan
               const statusKawin = String(warga.status_perkawinan || '').toLowerCase();
               if (statusKawin.includes('belum kawin') || statusKawin.includes('lajang')) {
                 stat.belumKawin += 1;
@@ -172,9 +187,6 @@ function DashboardContent() {
                 stat.kawin += 1;
               }
 
-              // ---------------------------------------------------------------------
-              // Status Pekerjaan (Klasifikasi Akurat)
-              // ---------------------------------------------------------------------
               const valStatusPekerjaan = String(warga.status_pekerjaan || '').toLowerCase().trim();
               const valPekerjaan = String(warga.pekerjaan || '').toLowerCase().trim();
 
@@ -252,7 +264,7 @@ function DashboardContent() {
   const totalSaldoBersih = totalKasMasuk - totalKasKeluar;
 
   return (
-    <div className="space-y-4 pb-12">
+    <div className="space-y-6 pb-12">
       {/* Card Saldo Kas Utama */}
       <div className="bg-gradient-to-br from-sky-600 to-sky-800 rounded-3xl p-5 text-white shadow-lg shadow-sky-600/20 relative overflow-hidden">
         <div className="flex justify-between items-start mb-4">
@@ -293,95 +305,101 @@ function DashboardContent() {
       </div>
 
       {/* Grid Aksi Cepat */}
-      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider px-1">
-        Aksi Cepat
-      </h3>
+      <div>
+        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider px-1 mb-2">
+          Aksi Cepat
+        </h3>
+        <div className="grid grid-cols-2 gap-3">
+          <Link
+            href="/iuran"
+            className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:border-sky-200 transition-all group"
+          >
+            <div className="w-9 h-9 bg-sky-50 text-sky-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+              <PlusCircle className="w-5 h-5" />
+            </div>
+            <h4 className="text-xs font-bold text-slate-800">Bayar Iuran</h4>
+            <p className="text-[10px] text-slate-400 mt-0.5">Catat transaksi warga</p>
+          </Link>
 
-      <div className="grid grid-cols-2 gap-3">
-        <Link
-          href="/iuran"
-          className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:border-sky-200 transition-all group"
-        >
-          <div className="w-9 h-9 bg-sky-50 text-sky-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-            <PlusCircle className="w-5 h-5" />
-          </div>
-          <h4 className="text-xs font-bold text-slate-800">Bayar Iuran</h4>
-          <p className="text-[10px] text-slate-400 mt-0.5">Catat transaksi warga</p>
-        </Link>
-
-        <Link
-          href="/pengeluaran"
-          className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:border-rose-200 transition-all group"
-        >
-          <div className="w-9 h-9 bg-rose-50 text-rose-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-            <Receipt className="w-5 h-5" />
-          </div>
-          <h4 className="text-xs font-bold text-slate-800">Foto Nota Kas</h4>
-          <p className="text-[10px] text-slate-400 mt-0.5">Upload pengeluaran</p>
-        </Link>
+          <Link
+            href="/pengeluaran"
+            className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:border-rose-200 transition-all group"
+          >
+            <div className="w-9 h-9 bg-rose-50 text-rose-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+              <Receipt className="w-5 h-5" />
+            </div>
+            <h4 className="text-xs font-bold text-slate-800">Foto Nota Kas</h4>
+            <p className="text-[10px] text-slate-400 mt-0.5">Upload pengeluaran</p>
+          </Link>
+        </div>
       </div>
 
-      {/* Section Rincian Sebaran Data Warga & Kas RT */}
-      <div className="space-y-2">
+      {/* Section Sebaran RT - Masing-masing terpisah dalam Card terpisah */}
+      <div className="space-y-3">
         <div className="flex items-center justify-between px-1">
-          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-            Sebaran Data Warga & Kas RT
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+            <Building2 className="w-4 h-4 text-sky-600" />
+            Sebaran Data Warga & Kas Per RT
           </h3>
-          <span className="text-[11px] font-bold text-sky-700 bg-sky-50 px-2.5 py-0.5 rounded-full">
+          <span className="text-[11px] font-bold text-sky-700 bg-sky-50 px-2.5 py-0.5 rounded-full border border-sky-100">
             Total: {totalKeseluruhanKK} KK
           </span>
         </div>
 
         {loading ? (
-          <div className="bg-white p-6 rounded-2xl border border-slate-100 flex items-center justify-center text-slate-400 gap-2">
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 flex items-center justify-center text-slate-400 gap-2 shadow-xs">
             <Loader2 className="w-4 h-4 animate-spin text-sky-600" />
             <span className="text-xs">Memuat sebaran RT...</span>
           </div>
         ) : statsPerRT.length === 0 ? (
-          <div className="bg-white p-4 rounded-2xl border border-slate-100 text-center text-xs text-slate-400">
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-xs text-slate-400 shadow-xs">
             Belum ada data warga terdaftar.
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-4">
             {statsPerRT.map((item) => (
-              <div
-                key={`rt-${item.rt}`}
-                className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-3"
+              <section
+                key={`card-rt-${item.rt}`}
+                className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs space-y-3 hover:border-sky-200 transition-all"
               >
-                {/* Header RT & Akses Link Detail */}
-                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 bg-sky-50 text-sky-600 rounded-xl flex items-center justify-center font-bold text-xs">
+                {/* Header RT */}
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 bg-sky-50 text-sky-700 rounded-xl flex items-center justify-center font-black text-xs border border-sky-100">
                       RT {item.rt}
                     </div>
                     <div>
-                      <h4 className="text-xs font-bold text-slate-800">
+                      <h4 className="text-xs font-extrabold text-slate-800">
                         RT {item.rt} / RW {item.rw}
                       </h4>
-                      <p className="text-[10px] font-semibold text-emerald-600 mt-0.5">
+                      <p className="text-[11px] font-bold text-emerald-600 mt-0.5">
                         Kas Masuk: Rp {item.totalKasMasuk.toLocaleString('id-ID')}
                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    <span className="px-2 py-0.5 bg-sky-50 text-sky-700 font-bold text-[11px] rounded-md">
+                    <span className="px-2.5 py-1 bg-sky-50 text-sky-700 font-bold text-[10px] rounded-lg border border-sky-100">
                       {item.totalKK} KK
                     </span>
-                    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 font-bold text-[11px] rounded-md flex items-center gap-1">
-                      <Users className="w-3 h-3" /> {item.totalWarga}
+                    <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 font-bold text-[10px] rounded-lg border border-emerald-100 flex items-center gap-1">
+                      <Users className="w-3 h-3" /> {item.totalWarga} Jiwa
                     </span>
-                    <Link href={`/warga?rt=${item.rt}`} className="text-slate-400 hover:text-sky-600 ml-1">
+                    <Link 
+                      href={`/warga?rt=${item.rt}`} 
+                      className="p-1 text-slate-400 hover:text-sky-600 hover:bg-slate-50 rounded-lg transition-colors ml-0.5"
+                    >
                       <ChevronRight className="w-4 h-4" />
                     </Link>
                   </div>
                 </div>
 
-                {/* Grid Rincian Status Perkawinan, Kematian & Pekerjaan */}
+                {/* Detail Demografi RT */}
                 <div className="grid grid-cols-2 gap-2 text-[11px]">
-                  {/* Perkawinan & Kematian */}
-                  <div className="bg-slate-50 p-2.5 rounded-xl space-y-1">
-                    <span className="font-bold text-slate-600 block text-[10px]">Perkawinan & Wafat</span>
+                  <div className="bg-slate-50/80 p-2.5 rounded-xl space-y-1 border border-slate-100">
+                    <span className="font-bold text-slate-600 block text-[10px] uppercase tracking-wider">
+                      Perkawinan & Wafat
+                    </span>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Belum Kawin:</span>
                       <span className="font-bold text-slate-700">{item.belumKawin}</span>
@@ -404,11 +422,12 @@ function DashboardContent() {
                     </div>
                   </div>
 
-                  {/* Status Pekerjaan */}
-                  <div className="bg-slate-50 p-2.5 rounded-xl space-y-1 flex flex-col justify-between">
+                  <div className="bg-slate-50/80 p-2.5 rounded-xl space-y-1 flex flex-col justify-between border border-slate-100">
                     <div>
-                      <span className="font-bold text-slate-600 block text-[10px]">Pekerjaan</span>
-                      <div className="flex justify-between mt-1">
+                      <span className="font-bold text-slate-600 block text-[10px] uppercase tracking-wider">
+                        Pekerjaan
+                      </span>
+                      <div className="flex justify-between mt-1.5">
                         <span className="text-slate-500">Bekerja:</span>
                         <span className="font-bold text-indigo-600">{item.bekerja}</span>
                       </div>
@@ -418,13 +437,12 @@ function DashboardContent() {
                       </div>
                     </div>
 
-                    <div className="pt-2 border-t border-slate-200/60 text-[9px] text-slate-400">
+                    <div className="pt-2 border-t border-slate-200/60 text-[9px] text-slate-400 italic">
                       *Warga hidup terdaftar
                     </div>
                   </div>
                 </div>
-
-              </div>
+              </section>
             ))}
           </div>
         )}

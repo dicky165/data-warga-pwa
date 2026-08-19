@@ -1,7 +1,6 @@
 'use client';
 
 export const dynamic = 'force-dynamic';
-
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import * as XLSX from 'xlsx';
@@ -29,9 +28,12 @@ import {
   FileSpreadsheet,
   FileText,
   AlertCircle,
-  Crown
+  Crown,
+  FileCheck
 } from 'lucide-react';
-import { cetakSuratPengantar } from '@/lib/generateSurat';
+
+// Import Modal Buat Surat yang baru dibuat
+import ModalBuatSurat from '@/components/surat/ModalBuatSurat';
 
 interface WilayahItem {
   id: number;
@@ -49,6 +51,7 @@ interface WilayahItem {
 interface AnggotaWarga {
   nik: string;
   nama_lengkap: string;
+  nama_panggilan?: string;
   no_whatsapp: string;
   is_active: boolean;
   shdk?: string;
@@ -85,18 +88,12 @@ interface GroupKartuKeluarga {
   no_hp_ketua_rw?: string;
   url_ttd_ketua_rw?: string;
   anggota: AnggotaWarga[];
+  wilayah_rt_rw?: {
+    master_desa?: {
+      nama_desa?: string;
+    };
+  };
 }
-
-type JenisSuratPengantar = 
-  | 'KTP_KK'
-  | 'AKTA'
-  | 'SKCK'
-  | 'NIKAH_PINDAH'
-  | 'IZIN_KERAMAIAN'
-  | 'SKTM_UMKM'
-  | 'KEMATIAN'
-  | 'BELUM_BEKERJA'
-  | 'SKTM_BEROBAT';
 
 const SHDK_OPTIONS = [
   'Kepala Keluarga',
@@ -139,14 +136,20 @@ export default function WargaPage() {
   const [selectedFilterRT, setSelectedFilterRT] = useState<string>('ALL');
   const [expandedKK, setExpandedKK] = useState<{ [no_kk: string]: boolean }>({});
   
+  // State Modal Tambah/Edit Warga
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedNik, setSelectedNik] = useState<string | null>(null);
+
+  // State Modal Surat Pengantar Terpisah Baru
+  const [isModalSuratOpen, setIsModalSuratOpen] = useState(false);
+  const [selectedWargaSurat, setSelectedWargaSurat] = useState<{ warga: AnggotaWarga; group: GroupKartuKeluarga } | null>(null);
 
   const [formData, setFormData] = useState({
     nik: '',
     no_kk: '',
     nama_lengkap: '',
+    nama_panggilan: '',
     shdk: 'Kepala Keluarga',
     kelas_iuran: 'A',
     is_wajib_ronda: false,
@@ -208,29 +211,10 @@ export default function WargaPage() {
         kelas_iuran,
         is_wajib_ronda,
         wilayah_rt_rw (
-          *
+          *,
+          master_desa ( * )
         ),
-        data_warga (
-          nik,
-          nama_lengkap,
-          shdk,
-          status_hubungan,
-          is_kepala,
-          no_whatsapp,
-          is_active,
-          tempat_lahir,
-          tanggal_lahir,
-          agama,
-          status_perkawinan,
-          pekerjaan,
-          golongan_darah,
-          status_warga,
-          tanggal_wafat,
-          penyebab_wafat,
-          status_pekerjaan,
-          status_ekonomi,
-          created_at
-        )
+        data_warga ( * )
       `);
 
     if (error) {
@@ -238,25 +222,46 @@ export default function WargaPage() {
     }
 
     if (!error && data) {
+      const getShdkPriority = (warga: AnggotaWarga): number => {
+        const shdk = (warga.shdk || warga.status_hubungan || '').toLowerCase().trim();
+        const isKepala = isKepalaCheck(warga);
+
+        if (isKepala) return 1;
+        if (shdk.includes('istri')) return 2;
+        if (shdk.includes('anak')) return 3;
+        return 4;
+      };
+
       const mappedGroups: GroupKartuKeluarga[] = data.map((kk: any) => {
-        // Antisipasi jika wilayah_rt_rw dikembalikan sebagai Array atau Object
         const wil = Array.isArray(kk.wilayah_rt_rw) ? kk.wilayah_rt_rw[0] : kk.wilayah_rt_rw;
         const rawAnggota = (kk.data_warga || []) as AnggotaWarga[];
 
         const sortedAnggota = [...rawAnggota].sort((a, b) => {
-          const isKepalaA = isKepalaCheck(a);
-          const isKepalaB = isKepalaCheck(b);
-          if (isKepalaA && !isKepalaB) return -1;
-          if (!isKepalaA && isKepalaB) return 1;
+          const priorityA = getShdkPriority(a);
+          const priorityB = getShdkPriority(b);
 
-          const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
-          const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-          return timeA - timeB;
+          if (priorityA !== priorityB) {
+            return priorityA - priorityB;
+          }
+
+          if (priorityA === 3) {
+            const timeA = a.tanggal_lahir ? new Date(a.tanggal_lahir).getTime() : 0;
+            const timeB = b.tanggal_lahir ? new Date(b.tanggal_lahir).getTime() : 0;
+
+            if (timeA && timeB) {
+              return timeA - timeB;
+            }
+            if (timeA && !timeB) return -1;
+            if (!timeA && timeB) return 1;
+          }
+
+          return a.nama_lengkap.localeCompare(b.nama_lengkap, 'id', { sensitivity: 'base' });
         });
 
         const anggotaList: AnggotaWarga[] = sortedAnggota.map((w: any) => ({
           nik: w.nik,
           nama_lengkap: w.nama_lengkap,
+          nama_panggilan: w.nama_panggilan || '',
           shdk: w.shdk || w.status_hubungan || 'Anggota',
           status_hubungan: w.status_hubungan,
           is_kepala: w.is_kepala,
@@ -290,8 +295,19 @@ export default function WargaPage() {
           url_ttd_ketua_rt: wil?.url_ttd_ketua_rt || '',
           nama_ketua_rw: wil?.nama_ketua_rw || '',
           url_ttd_ketua_rw: wil?.url_ttd_ketua_rw || '',
+          wilayah_rt_rw: wil,
           anggota: anggotaList
         };
+      });
+
+      mappedGroups.sort((groupA, groupB) => {
+        const kepalaA = groupA.anggota.find(w => isKepalaCheck(w)) || groupA.anggota[0];
+        const kepalaB = groupB.anggota.find(w => isKepalaCheck(w)) || groupB.anggota[0];
+
+        const namaKepalaA = kepalaA?.nama_lengkap || '';
+        const namaKepalaB = kepalaB?.nama_lengkap || '';
+
+        return namaKepalaA.localeCompare(namaKepalaB, 'id', { sensitivity: 'base' });
       });
 
       setListGroupKK(mappedGroups);
@@ -325,6 +341,7 @@ export default function WargaPage() {
         nik: wargaEdit.nik,
         no_kk: groupKK.no_kk,
         nama_lengkap: wargaEdit.nama_lengkap,
+        nama_panggilan: wargaEdit.nama_panggilan || '',
         shdk: wargaEdit.shdk || 'Anggota',
         is_wajib_ronda: groupKK?.is_wajib_ronda ?? false,
         kelas_iuran: wargaEdit.kelas_iuran || groupKK.kelas_iuran || 'A',
@@ -350,6 +367,7 @@ export default function WargaPage() {
         nik: '',
         no_kk: defaultNoKK,
         nama_lengkap: '',
+        nama_panggilan: '',
         shdk: isKKFirstMember ? 'Kepala Keluarga' : 'Anak',
         kelas_iuran: groupKK?.kelas_iuran || 'A',
         is_wajib_ronda: groupKK?.is_wajib_ronda ?? false,
@@ -391,6 +409,7 @@ export default function WargaPage() {
           no_kk: formData.no_kk,
           id_wilayah: selectedIdWilayah,
           alamat: formData.alamat || '',
+          kelas_iuran: formData.kelas_iuran,
           is_wajib_ronda: formData.is_wajib_ronda
         }, { onConflict: 'no_kk' });
 
@@ -400,6 +419,7 @@ export default function WargaPage() {
         nik: formData.nik,
         no_kk: formData.no_kk,
         nama_lengkap: formData.nama_lengkap,
+        nama_panggilan: formData.nama_panggilan || null,
         shdk: formData.shdk,
         kelas_iuran: formData.kelas_iuran,
         no_whatsapp: formData.no_whatsapp || '',
@@ -453,59 +473,10 @@ export default function WargaPage() {
     window.open(`https://wa.me/${waNumber}?text=${encodeURIComponent(pesan)}`, '_blank');
   };
 
-  const handleCetakSuratWarga = (
-    warga: AnggotaWarga, 
-    group: GroupKartuKeluarga, 
-    jenis: JenisSuratPengantar
-  ) => {
-    // Ambil data pejabat dari group KK atau fallback ke pengaturan aplikasi
-    const namaRt = group.nama_ketua_rt || pengaturanAplikasi?.nama_pejabat_rt || pengaturanAplikasi?.nama_pejabat || '';
-    const noHpRt = group.no_hp_ketua_rt || pengaturanAplikasi?.no_hp_pejabat_rt || pengaturanAplikasi?.no_hp_pejabat || '';
-    const ttdRt = group.url_ttd_ketua_rt || pengaturanAplikasi?.url_ttd_pejabat_rt || pengaturanAplikasi?.url_ttd_pejabat || '';
-
-    const namaRw = group.nama_ketua_rw || pengaturanAplikasi?.nama_pejabat_rw || pengaturanAplikasi?.nama_pejabat || '';
-    const noHpRw = pengaturanAplikasi?.no_hp_pejabat_rw || pengaturanAplikasi?.no_hp_pejabat || '';
-    const ttdRw = group.url_ttd_ketua_rw || pengaturanAplikasi?.url_ttd_pejabat_rw || pengaturanAplikasi?.url_ttd_pejabat || '';
-
-    // Cetak log ke console browser untuk memverifikasi data sebelum dicetak
-    console.log('Data Pejabat yang dikirim ke PDF:', { namaRt, ttdRt, namaRw, ttdRw });
-
-    cetakSuratPengantar({
-      jenisSurat: jenis,
-      namaWarga: warga.nama_lengkap,
-      nik: warga.nik,
-      noKK: group.no_kk,
-      ttl: `${warga.tempat_lahir || '-'}${warga.tanggal_lahir ? ', ' + warga.tanggal_lahir : ''}`,
-      alamat: group.alamat || '-',
-      rt: group.rt || '001',
-      rw: group.rw || '010',
-      desa: group.nama_kampung || pengaturanAplikasi?.nama_desa || 'KP. BALONG',
-
-      // Variasi nama properti Ketua RT
-      namaKetuaRt: namaRt,
-      nama_ketua_rt: namaRt,
-      namaRt: namaRt,
-      nama_rt: namaRt,
-      ketuaRt: namaRt,
-      namaPejabatRt: namaRt,
-
-      // Variasi nama properti Ketua RW
-      namaKetuaRw: namaRw,
-      nama_ketua_rw: namaRw,
-      namaRw: namaRw,
-      nama_rw: namaRw,
-      ketuaRw: namaRw,
-      namaPejabatRw: namaRw,
-
-      // TTD & No HP
-      urlTtdKetuaRt: ttdRt,
-      url_ttd_ketua_rt: ttdRt,
-      urlTtdKetuaRw: ttdRw,
-      url_ttd_ketua_rw: ttdRw,
-
-      tglWafat: warga.tanggal_wafat,
-      sebabWafat: warga.penyebab_wafat
-    } as any);
+  // DIPINDAHKAN & DIMODIFIKASI: Mengarahkan pembuatan surat ke ModalBuatSurat yang baru
+  const handleOpenModalSurat = (warga: AnggotaWarga, group: GroupKartuKeluarga) => {
+    setSelectedWargaSurat({ warga, group });
+    setIsModalSuratOpen(true);
   };
 
   const filteredGroups = listGroupKK.filter((group) => {
@@ -517,6 +488,7 @@ export default function WargaPage() {
       group.anggota.some(
         (w) =>
           w.nama_lengkap.toLowerCase().includes(query) ||
+          (w.nama_panggilan && w.nama_panggilan.toLowerCase().includes(query)) ||
           w.nik.includes(query) ||
           (w.pekerjaan && w.pekerjaan.toLowerCase().includes(query))
       );
@@ -537,6 +509,7 @@ export default function WargaPage() {
           'No. KK': group.no_kk,
           'Pilihan Iuran KK': `Pilihan ${warga.kelas_iuran || group.kelas_iuran || 'A'}`,
           'Nama Lengkap': warga.nama_lengkap,
+          'Nama Panggilan/Alias': warga.nama_panggilan || '',
           'SHDK': warga.shdk || 'Anggota',
           'NIK': warga.nik,
           'Status Warga': warga.status_warga,
@@ -571,7 +544,7 @@ export default function WargaPage() {
     const tableColumns = [
       'No. KK',
       'Pilihan Iuran',
-      'Nama Lengkap',
+      'Nama Lengkap (Alias)',
       'SHDK',
       'NIK',
       'Status',
@@ -590,11 +563,14 @@ export default function WargaPage() {
         const u = hitungUmur(warga.tanggal_lahir);
         const ttl = `${warga.tempat_lahir ? warga.tempat_lahir + ', ' : ''}${warga.tanggal_lahir || '-'}`;
         const rtrw = `RT ${group.rt || '-'}/RW ${group.rw || '-'}`;
+        const namaDisplay = warga.nama_panggilan 
+          ? `${warga.nama_lengkap} (${warga.nama_panggilan})` 
+          : warga.nama_lengkap;
 
         tableRows.push([
           idx === 0 ? group.no_kk : '',
           idx === 0 ? `Pilihan ${group.kelas_iuran || 'A'}` : '',
-          warga.nama_lengkap,
+          namaDisplay,
           warga.shdk || 'Anggota',
           warga.nik,
           warga.status_warga,
@@ -667,7 +643,7 @@ export default function WargaPage() {
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Cari berdasarkan Nama, NIK, No. KK, atau Alamat..."
+            placeholder="Cari berdasarkan Nama, Nama Panggilan, NIK, No. KK, atau Alamat..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 shadow-sm"
@@ -704,9 +680,13 @@ export default function WargaPage() {
       ) : (
         <div className="space-y-3">
           {filteredGroups.map((group) => {
-            const isExpanded = expandedKK[group.no_kk] ?? true;
+            const isExpanded = expandedKK[group.no_kk] ?? false;
             const kepalaWarga = group.anggota.find(w => isKepalaCheck(w)) || group.anggota[0];
-            const kepalaKeluarga = kepalaWarga?.nama_lengkap || 'Kepala Keluarga Belum Diisi';
+            const kepalaKeluarga = kepalaWarga
+              ? (kepalaWarga.nama_panggilan 
+                  ? `${kepalaWarga.nama_lengkap} (${kepalaWarga.nama_panggilan})` 
+                  : kepalaWarga.nama_lengkap)
+              : 'Kepala Keluarga Belum Diisi';
 
             return (
               <div 
@@ -795,6 +775,13 @@ export default function WargaPage() {
                                 {warga.nama_lengkap}
                               </span>
 
+                              {/* Badge Nama Panggilan/Alias */}
+                              {warga.nama_panggilan && (
+                                <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
+                                  "{warga.nama_panggilan}"
+                                </span>
+                              )}
+
                               {/* SHDK */}
                               <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-md border ${
                                 isKepala 
@@ -835,30 +822,15 @@ export default function WargaPage() {
 
                             {/* Actions Buttons / Surat Menyurat Menu */}
                             <div className="flex items-center gap-1.5">
-                              {/* Menu Cetak Surat Menyurat RT/RW */}
-                              <div className="relative">
-                                <select
-                                  onChange={(e) => {
-                                    if (e.target.value) {
-                                      handleCetakSuratWarga(warga, group, e.target.value as JenisSuratPengantar);
-                                      e.target.value = '';
-                                    }
-                                  }}
-                                  defaultValue=""
-                                  className="px-2 py-1 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded text-[10px] font-semibold transition-all focus:outline-none cursor-pointer"
-                                >
-                                  <option value="" disabled>📜 Cetak Surat Pengantar RT/RW...</option>
-                                  <option value="KTP_KK">1. Pengantar KTP / KK Baru</option>
-                                  <option value="AKTA">2. Pengantar Akta Kelahiran / Kematian</option>
-                                  <option value="SKCK">3. Pengantar SKCK</option>
-                                  <option value="NIKAH_PINDAH">4. Pengantar Nikah / Pindah Domisili</option>
-                                  <option value="IZIN_KERAMAIAN">5. Pengantar Izin Keramaian / Kegiatan</option>
-                                  <option value="SKTM_UMKM">6. Pengantar SKTM / Domisili Usaha Mikro</option>
-                                  {warga.status_warga === 'MENINGGAL' && (
-                                    <option value="KEMATIAN">7. Surat Keterangan Kematian</option>
-                                  )}
-                                </select>
-                              </div>
+                              {/* MODIFIKASI: Tombol Pindah Jalur ke Modal Buat Surat */}
+                              <button
+                                onClick={() => handleOpenModalSurat(warga, group)}
+                                className="px-2 py-1 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded text-[10px] font-semibold transition-all flex items-center gap-1 cursor-pointer"
+                                title="Buat & Cetak Surat Pengantar RT/RW"
+                              >
+                                <FileCheck className="w-3.5 h-3.5 text-sky-600" />
+                                <span>Buat Surat</span>
+                              </button>
 
                               <button
                                 onClick={() => handleOpenModal(group.no_kk, warga, group)}
@@ -975,7 +947,7 @@ export default function WargaPage() {
               </button>
             </div>
 
-            <form id="warga-form" onSubmit={handleSubmit} className="space-y-3 py-3 overflow-y-auto flex-1 text-xs">
+            <form id="warga-form" onSubmit={handleSubmit} className="space-y-3 py-3 overflow-y-auto flex-1 text-xs pr-1">
               
               {/* SHDK & Pilihan Tarif Iuran KK */}
               <div className="grid grid-cols-2 gap-2">
@@ -1012,8 +984,6 @@ export default function WargaPage() {
                 </div>
               </div>
 
-              
-
               {/* NIK & No KK */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -1046,19 +1016,34 @@ export default function WargaPage() {
                 </div>
               </div>
 
-              {/* Nama Lengkap */}
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                  Nama Lengkap *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Nama Lengkap Sesuai KTP/KK"
-                  value={formData.nama_lengkap}
-                  onChange={(e) => setFormData({ ...formData, nama_lengkap: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none font-medium text-slate-800"
-                />
+              {/* Nama Lengkap & Nama Panggilan / Alias */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Nama Lengkap *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Nama Lengkap Sesuai KTP/KK"
+                    value={formData.nama_lengkap}
+                    onChange={(e) => setFormData({ ...formData, nama_lengkap: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none font-medium text-slate-800"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Nama Panggilan / Alias <span className="text-[9px] text-slate-400 font-normal">(Opsional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: Boni / Pak De"
+                    value={formData.nama_panggilan}
+                    onChange={(e) => setFormData({ ...formData, nama_panggilan: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none font-medium text-amber-900 bg-amber-50/40"
+                  />
+                </div>
               </div>
 
               {/* Status Warga */}
@@ -1293,14 +1278,12 @@ export default function WargaPage() {
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:outline-none font-mono"
                 />
               </div>
-            </form>
 
-
-            {/* Status Tugas Ronda Warga (Model Toggle Switch / Slide) */}
-              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 sm:col-span-2">
+              {/* Status Tugas Ronda Warga */}
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 my-2">
                 <div>
                   <label className="block text-xs font-semibold text-slate-800">
-                    Wajib Ikut Ronda Night / Siskamling?
+                    Wajib Ikut Ronda Malam / Siskamling?
                   </label>
                   <p className="text-[10px] text-slate-500 mt-0.5">
                     {formData.is_wajib_ronda 
@@ -1326,6 +1309,8 @@ export default function WargaPage() {
                 </button>
               </div>
 
+            </form>
+
             <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2 flex-shrink-0">
               <button
                 type="button"
@@ -1346,6 +1331,18 @@ export default function WargaPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* MODAL SURAT MODULAR TERPISAH BARU */}
+      {isModalSuratOpen && selectedWargaSurat && (
+        <ModalBuatSurat
+          isOpen={isModalSuratOpen}
+          onClose={() => setIsModalSuratOpen(false)}
+          nikWarga={selectedWargaSurat.warga.nik}
+          namaWarga={selectedWargaSurat.warga.nama_lengkap}
+          rt={selectedWargaSurat.group.rt || '001'}
+          rw={selectedWargaSurat.group.rw || '010'}
+        />
       )}
     </div>
   );

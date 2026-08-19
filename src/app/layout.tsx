@@ -32,6 +32,21 @@ export default function RootLayout({
     <html lang="id">
       <body className="bg-slate-50 text-slate-900 antialiased selection:bg-sky-500 selection:text-white">
         {children}
+
+        {/* Script Registrasi Service Worker PWA */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if ('serviceWorker' in navigator) {
+                window.addEventListener('load', function() {
+                  navigator.serviceWorker.register('/sw.js').catch(function(err) {
+                    console.error('ServiceWorker registration failed: ', err);
+                  });
+                });
+              }
+            `,
+          }}
+        />
       </body>
     </html>
   );

@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, PlusCircle, Receipt, Users, Coins, LogOut } from 'lucide-react';
+import { Home, PlusCircle, Receipt, Users, Coins, LogOut, Mail } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 
 export default function DashboardLayout({
@@ -37,6 +37,11 @@ export default function DashboardLayout({
       icon: Users,
     },
     {
+      label: 'Surat',
+      href: '/surat', // Navigasi baru untuk Surat Menyurat
+      icon: Mail,
+    },
+    {
       label: 'Iuran',
       href: '/iuran',
       icon: PlusCircle,
@@ -67,7 +72,7 @@ export default function DashboardLayout({
           </div>
         </div>
 
-        {/* Tombol Logout dengan Event Handler */}
+        {/* Tombol Logout */}
         <button
           type="button"
           onClick={handleLogout}
@@ -85,7 +90,7 @@ export default function DashboardLayout({
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-md border-t border-slate-200 px-2 py-2 flex justify-around items-center max-w-md mx-auto">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isActive = pathname === item.href;
+          const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
 
           return (
             <Link
