@@ -3,14 +3,15 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { ShieldCheck, Mail, Lock, LogIn, AlertCircle } from 'lucide-react';
+import { ShieldCheck, User, Lock, LogIn, AlertCircle, Users } from 'lucide-react';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [loginMode, setLoginMode] = useState<'warga' | 'pengurus'>('warga');
+  const [identifier, setIdentifier] = useState(''); // Berisi NIK/Username (Warga) atau Email (Pengurus)
+  const [password, setPassword] = useState('');     // Berisi No. KK/Password (Warga) atau Password (Pengurus)
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  
+
   const router = useRouter();
   const supabase = createClient();
 
@@ -19,31 +20,104 @@ export default function LoginPage() {
     setLoading(true);
     setErrorMessage(null);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      if (loginMode === 'warga') {
+        // 1. LOGIN WARGA (Melalui API Route /api/auth/login-warga)
+        const res = await fetch('/api/auth/login-warga', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: identifier.trim(),
+            password: password.trim(),
+          }),
+        });
 
-    if (error) {
-      setErrorMessage(error.message || 'Gagal masuk. Periksa email dan kata sandi Anda.');
-      setLoading(false);
-    } else {
-      router.push('/');
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.message || 'Gagal masuk. Periksa NIK/Username dan No. KK/Kata Sandi Anda.');
+        }
+
+        // Set session di client dan redirect ke portal warga
+        await supabase.auth.setSession(data.session);
+        router.push('/warga-app');
+      } else {
+        // 2. LOGIN PENGURUS (Langsung via Supabase Auth)
+        const { error } = await supabase.auth.signInWithPassword({
+          email: identifier.trim(),
+          password,
+        });
+
+        if (error) {
+          throw new Error(error.message || 'Gagal masuk. Periksa email dan kata sandi Anda.');
+        }
+
+        router.push('/');
+      }
+
       router.refresh();
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="bg-white rounded-3xl p-6 shadow-xl border border-slate-100">
+    <div className="bg-white rounded-3xl p-6 shadow-xl border border-slate-100 max-w-sm mx-auto">
       {/* Header Form */}
-      <div className="flex flex-col items-center text-center mb-6">
-        <div className="w-14 h-14 bg-sky-600 rounded-2xl flex items-center justify-center text-white mb-3 shadow-lg shadow-sky-600/30">
-          <ShieldCheck className="w-8 h-8" />
+      <div className="flex flex-col items-center text-center mb-5">
+        <div
+          className={`w-14 h-14 rounded-2xl flex items-center justify-center text-white mb-3 shadow-lg transition-all ${
+            loginMode === 'warga'
+              ? 'bg-emerald-600 shadow-emerald-600/30'
+              : 'bg-sky-600 shadow-sky-600/30'
+          }`}
+        >
+          {loginMode === 'warga' ? (
+            <Users className="w-8 h-8" />
+          ) : (
+            <ShieldCheck className="w-8 h-8" />
+          )}
         </div>
         <h1 className="text-xl font-bold text-slate-800">Sistem Data Warga</h1>
         <p className="text-xs text-slate-500 mt-1">
-          Masuk untuk mengelola data RT/RW & Transparansi Kas
+          {loginMode === 'warga'
+            ? 'Portal Layanan & Transparansi Warga'
+            : 'Masuk untuk Pengurus RT/RW'}
         </p>
+      </div>
+
+      {/* Tab Switcher Mode Login */}
+      <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-xl text-xs font-semibold mb-5">
+        <button
+          type="button"
+          onClick={() => {
+            setLoginMode('warga');
+            setErrorMessage(null);
+          }}
+          className={`py-2 rounded-lg transition-all ${
+            loginMode === 'warga'
+              ? 'bg-white text-emerald-600 shadow-sm'
+              : 'text-slate-500'
+          }`}
+        >
+          Akses Warga
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setLoginMode('pengurus');
+            setErrorMessage(null);
+          }}
+          className={`py-2 rounded-lg transition-all ${
+            loginMode === 'pengurus'
+              ? 'bg-white text-sky-600 shadow-sm'
+              : 'text-slate-500'
+          }`}
+        >
+          Akses Pengurus
+        </button>
       </div>
 
       {/* Pesan Error */}
@@ -56,26 +130,32 @@ export default function LoginPage() {
 
       {/* Form Login */}
       <form onSubmit={handleLogin} className="space-y-4">
+        {/* Field Identitas / Username / Email */}
         <div>
           <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-            Alamat Email
+            {loginMode === 'warga' ? 'Username / NIK' : 'Alamat Email'}
           </label>
           <div className="relative flex items-center">
-            <Mail className="w-5 h-5 absolute left-3.5 text-slate-400" />
+            <User className="w-5 h-5 absolute left-3.5 text-slate-400" />
             <input
-              type="email"
+              type="text"
               required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="pengurus@rt-rw.id"
-              className="w-full h-12 pl-11 pr-4 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white text-slate-800 transition-all"
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
+              placeholder={
+                loginMode === 'warga'
+                  ? 'Masukkan NIK atau Username Anda'
+                  : 'pengurus@rt-rw.id'
+              }
+              className="w-full h-12 pl-11 pr-4 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all"
             />
           </div>
         </div>
 
+        {/* Field Kata Sandi / No. KK */}
         <div>
           <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-            Kata Sandi
+            {loginMode === 'warga' ? 'Kata Sandi / No. KK' : 'Kata Sandi'}
           </label>
           <div className="relative flex items-center">
             <Lock className="w-5 h-5 absolute left-3.5 text-slate-400" />
@@ -84,23 +164,38 @@ export default function LoginPage() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full h-12 pl-11 pr-4 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white text-slate-800 transition-all"
+              placeholder={
+                loginMode === 'warga'
+                  ? 'Masukkan No. KK atau Kata Sandi'
+                  : '••••••••'
+              }
+              className="w-full h-12 pl-11 pr-4 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white text-slate-800 transition-all"
             />
           </div>
         </div>
 
-        {/* Tombol Masuk (Min Touch Target 44px / h-12) */}
+        {/* Tombol Submit */}
         <button
           type="submit"
           disabled={loading}
-          className="w-full h-12 mt-2 bg-sky-600 hover:bg-sky-700 active:bg-sky-800 text-white font-semibold text-sm rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 shadow-md shadow-sky-600/20"
+          className={`w-full h-12 mt-2 text-white font-semibold text-sm rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 shadow-md ${
+            loginMode === 'warga'
+              ? 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 shadow-emerald-600/20'
+              : 'bg-sky-600 hover:bg-sky-700 active:bg-sky-800 shadow-sky-600/20'
+          }`}
         >
           <LogIn className="w-5 h-5" />
-          <span>{loading ? 'Memproses...' : 'Masuk Aplikasi'}</span>
+          <span>
+            {loading
+              ? 'Memproses...'
+              : loginMode === 'warga'
+              ? 'Masuk Portal Warga'
+              : 'Masuk Aplikasi Admin'}
+          </span>
         </button>
       </form>
 
+      {/* Footer */}
       <div className="mt-6 pt-4 border-t border-slate-100 text-center">
         <p className="text-[11px] text-slate-400">
           Aplikasi Manajemen Warga PWA &copy; 2026

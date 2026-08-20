@@ -32,11 +32,9 @@ export default function BuatSuratPage() {
   const [jenisSurat, setJenisSurat] = useState('IJIN_KERAMAIAN');
   const [keterangan, setKeterangan] = useState('');
   const [catatan, setCatatan] = useState('');
-  const [noSurat, setNoSurat] = useState('');
 
   useEffect(() => {
     fetchWarga();
-    generateNoSurat();
 
     // Close dropdown when clicking outside
     function handleClickOutside(event: MouseEvent) {
@@ -66,17 +64,6 @@ export default function BuatSuratPage() {
     }
   }
 
-  function generateNoSurat() {
-    const randomNum = Math.floor(Math.random() * 900) + 100;
-    const date = new Date();
-    const romanMonths = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
-    const currentMonth = romanMonths[date.getMonth()];
-    const currentYear = date.getFullYear();
-
-    const generated = `${String(randomNum).padStart(3, '0')}/PR/RT001-RW010/${currentMonth}/${currentYear}`;
-    setNoSurat(generated);
-  }
-
   // Filter daftar warga berdasarkan apa yang diketik
   const filteredWarga = listWarga.filter(
     (w) =>
@@ -104,24 +91,17 @@ export default function BuatSuratPage() {
     try {
       setSubmitting(true);
 
-      // 1. Ambil nomor urut terakhir dari database
-      const { data: lastSurat } = await supabase
-        .from('surat_pengantar')
-        .select('no_urut')
-        .order('no_urut', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      // Generate string unik untuk placeholder no_surat agar tidak melanggar UNIQUE constraint
+      const uniquePendingNo = `PENDING-${nikWarga}-${Date.now()}`;
 
-      const nextNoUrut = (lastSurat?.no_urut || 0) + 1;
-
-      // 2. Sertakan no_urut ke dalam payload
       const payload = {
-        no_urut: nextNoUrut, // 👈 Ditambahkan di sini
-        no_surat: noSurat,
+        no_urut: 0,
+        no_surat: uniquePendingNo, // 👈 Dibuat unik menggunakan NIK + Timestamp
         nik_warga: nikWarga,
         jenis_surat: jenisSurat,
         keterangan: keterangan,
         tanggal_surat: new Date().toISOString().split('T')[0],
+        status: 'pending',
         detail_tambahan: {
           nama_pemohon: namaPemohon,
           catatan: catatan,
@@ -130,15 +110,14 @@ export default function BuatSuratPage() {
         },
       };
 
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('surat_pengantar')
-        .insert([payload])
-        .select()
-        .single();
+        .insert([payload]);
 
       if (error) throw error;
 
-      router.push(`/surat/cetak/${data.id}`);
+      // Kembali ke halaman daftar surat untuk Approve
+      router.push('/surat');
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal menyimpan surat pengantar.');
     } finally {
@@ -151,6 +130,7 @@ export default function BuatSuratPage() {
       {/* Header Bar */}
       <div className="flex items-center justify-between">
         <button
+          type="button"
           onClick={() => router.back()}
           className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white px-3 py-1.5 rounded-xl border border-slate-200 cursor-pointer"
         >
@@ -171,20 +151,6 @@ export default function BuatSuratPage() {
             {errorMsg}
           </div>
         )}
-
-        {/* Nomor Surat */}
-        <div>
-          <label className="text-[11px] font-semibold text-slate-700 block mb-1">
-            Nomor Surat Otomatis
-          </label>
-          <input
-            type="text"
-            value={noSurat}
-            onChange={(e) => setNoSurat(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
-            required
-          />
-        </div>
 
         {/* Searchable Combobox Pilih Warga */}
         <div className="relative" ref={dropdownRef}>
@@ -271,15 +237,15 @@ export default function BuatSuratPage() {
 
         {/* Jenis Surat */}
         <div>
-        <label className="text-[11px] font-semibold text-slate-700 block mb-1 flex items-center gap-1">
+          <label className="text-[11px] font-semibold text-slate-700 block mb-1 flex items-center gap-1">
             <Tag className="w-3.5 h-3.5 text-sky-600" />
             Jenis Surat <span className="text-rose-500">*</span>
-        </label>
-        <select
+          </label>
+          <select
             value={jenisSurat}
             onChange={(e) => setJenisSurat(e.target.value)}
             className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
-        >
+          >
             <option value="IJIN_KERAMAIAN">IJIN KERAMAIAN</option>
             <option value="DOMISILI">SURAT KETERANGAN DOMISILI</option>
             <option value="SKCK">SURAT PENGANTAR SKCK</option>
@@ -291,7 +257,7 @@ export default function BuatSuratPage() {
             <option value="PINDAH_DOMISILI">SURAT PINDAH DOMISILI</option>
             <option value="PINDAH">SURAT PINDAH</option>
             <option value="KEMATIAN">SURAT KETERANGAN KEMATIAN</option>
-        </select>
+          </select>
         </div>
 
         {/* RT / RW */}
@@ -355,12 +321,12 @@ export default function BuatSuratPage() {
           {submitting ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              Menyimpan Surat...
+              Menyimpan Pengajuan...
             </>
           ) : (
             <>
               <Save className="w-4 h-4" />
-              Simpan & Cetak Surat
+              Simpan Pengajuan Surat
             </>
           )}
         </button>

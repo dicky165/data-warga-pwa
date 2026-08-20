@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, PlusCircle, Receipt, Users, Coins, LogOut, Mail } from 'lucide-react';
+import { Home, PlusCircle, Receipt, Users, Coins, LogOut, Mail, Megaphone } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 
 export default function DashboardLayout({
@@ -38,7 +38,7 @@ export default function DashboardLayout({
     },
     {
       label: 'Surat',
-      href: '/surat', // Navigasi baru untuk Surat Menyurat
+      href: '/surat',
       icon: Mail,
     },
     {
@@ -72,15 +72,31 @@ export default function DashboardLayout({
           </div>
         </div>
 
-        {/* Tombol Logout */}
-        <button
-          type="button"
-          onClick={handleLogout}
-          title="Keluar"
-          className="p-2 bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-600 rounded-xl transition-all"
-        >
-          <LogOut className="w-4 h-4" />
-        </button>
+        {/* Action Buttons Header */}
+        <div className="flex items-center gap-1.5">
+          {/* Shortcut Pengumuman */}
+          <Link
+            href="/pengumuman"
+            title="Pengumuman Warga"
+            className={`p-2 rounded-xl transition-all flex items-center gap-1 ${
+              pathname.startsWith('/pengumuman')
+                ? 'bg-sky-100 text-sky-600 font-semibold'
+                : 'bg-slate-100 hover:bg-sky-50 hover:text-sky-600 text-slate-600'
+            }`}
+          >
+            <Megaphone className="w-4 h-4" />
+          </Link>
+
+          {/* Tombol Logout */}
+          <button
+            type="button"
+            onClick={handleLogout}
+            title="Keluar"
+            className="p-2 bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-600 rounded-xl transition-all"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </header>
 
       {/* Area Konten */}
@@ -90,7 +106,7 @@ export default function DashboardLayout({
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-md border-t border-slate-200 px-2 py-2 flex justify-around items-center max-w-md mx-auto">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
+          const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(`${item.href}/`));
 
           return (
             <Link

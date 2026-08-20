@@ -12,12 +12,15 @@ import {
   Loader2, 
   CheckCircle2, 
   Pencil, 
-  Trash2 
+  Trash2,
+  Clock,
+  XCircle
 } from 'lucide-react';
 
 interface SuratItem {
   id: string;
   no_surat: string;
+  no_urut?: number;
   nik_warga: string;
   jenis_surat: string;
   keterangan: string;
@@ -26,6 +29,9 @@ interface SuratItem {
   detail_tambahan?: {
     nama_pemohon?: string;
   };
+  warga?: {
+    nama?: string;
+  } | null;
 }
 
 export default function SuratPage() {
@@ -33,6 +39,7 @@ export default function SuratPage() {
   const [listSurat, setListSurat] = useState<SuratItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
@@ -42,17 +49,104 @@ export default function SuratPage() {
   async function fetchSurat() {
     try {
       setLoading(true);
-      const { data, error } = await supabase
+
+      // 1. Ambil data surat_pengantar
+      const { data: suratData, error: suratError } = await supabase
         .from('surat_pengantar')
         .select('*')
-        .order('tanggal_surat', { ascending: false });
+        .order('created_at', { ascending: false });
 
-      if (error) throw error;
-      setListSurat(data || []);
+      if (suratError) throw suratError;
+      if (!suratData || suratData.length === 0) {
+        setListSurat([]);
+        return;
+      }
+
+      // 2. Ambil semua NIK unik
+      const nikList = Array.from(
+        new Set(suratData.map((s) => String(s.nik_warga).trim()).filter(Boolean))
+      );
+
+      // 3. Query nama_lengkap dari tabel data_warga
+      let wargaMap: Record<string, string> = {};
+      if (nikList.length > 0) {
+        const { data: wargaData } = await supabase
+          .from('data_warga')
+          .select('nik, nama_lengkap')
+          .in('nik', nikList);
+
+        if (wargaData) {
+          wargaData.forEach((w) => {
+            wargaMap[String(w.nik).trim()] = w.nama_lengkap;
+          });
+        }
+      }
+
+      // 4. Gabungkan data nama warga ke item surat
+      const formattedSurat = suratData.map((item) => {
+        const cleanNik = String(item.nik_warga).trim();
+        const namaWarga = wargaMap[cleanNik] || item.detail_tambahan?.nama_pemohon || 'Warga (Tanpa Nama)';
+
+        return {
+          ...item,
+          warga: {
+            nama: namaWarga,
+          },
+        };
+      });
+
+      setListSurat(formattedSurat);
     } catch (err: any) {
       console.error('Gagal mengambil data surat:', err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Fungsi Approve (Setujui) & Tolak Surat
+  async function handleUpdateStatus(id: string, statusBaru: 'disetujui' | 'ditolak') {
+    try {
+      setUpdatingId(id);
+
+      let updatePayload: any = { status: statusBaru };
+
+      // Jika disetujui, buat nomor surat otomatis dan nomor urut baru
+      if (statusBaru === 'disetujui') {
+        const { data: lastSurat } = await supabase
+          .from('surat_pengantar')
+          .select('no_urut')
+          .order('no_urut', { ascending: false })
+          .limit(1)
+          .single();
+
+        const nextUrut = (lastSurat?.no_urut || 0) + 1;
+        const bulanRomi = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'][new Date().getMonth()];
+        const tahun = new Date().getFullYear();
+
+        updatePayload.no_urut = nextUrut;
+        updatePayload.no_surat = `${String(nextUrut).padStart(3, '0')}/PR/RT001-RW010/${bulanRomi}/${tahun}`;
+      }
+
+      const { error } = await supabase
+        .from('surat_pengantar')
+        .update(updatePayload)
+        .eq('id', id);
+
+      if (error) throw error;
+
+      // Update state lokal secara instan
+      setListSurat((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, ...updatePayload } : item
+        )
+      );
+
+      alert(`Surat berhasil ${statusBaru === 'disetujui' ? 'disetujui' : 'ditolak'}!`);
+    } catch (err: any) {
+      console.error('Gagal update status:', err);
+      alert('Gagal memperbarui status surat: ' + err.message);
+    } finally {
+      setUpdatingId(null);
     }
   }
 
@@ -64,22 +158,17 @@ export default function SuratPage() {
     try {
       setDeletingId(id);
 
-      // Eksekusi penghapusan di Supabase
       const { error, count } = await supabase
         .from('surat_pengantar')
         .delete({ count: 'exact' })
         .eq('id', id);
 
-      if (error) {
-        throw new Error(error.message);
-      }
+      if (error) throw new Error(error.message);
 
-      // Jika tidak ada baris yang terhapus (misal ditolak RLS tanpa melempar exception)
       if (count === 0) {
         throw new Error('Data gagal dihapus dari database. Periksa izin/policy RLS Supabase Anda.');
       }
 
-      // Hapus data dari state lokal hanya jika benar-benar berhasil terhapus di DB
       setListSurat((prev) => prev.filter((item) => item.id !== id));
       alert('Data surat berhasil dihapus.');
     } catch (err: any) {
@@ -90,10 +179,38 @@ export default function SuratPage() {
     }
   }
 
+  // Helper Badge Status Surat
+  const renderStatusBadge = (status?: string) => {
+    switch (status?.toLowerCase()) {
+      case 'disetujui':
+      case 'selesai':
+        return (
+          <span className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Disetujui
+          </span>
+        );
+      case 'ditolak':
+        return (
+          <span className="flex items-center gap-1 text-[10px] text-rose-600 font-bold">
+            <XCircle className="w-3.5 h-3.5" />
+            Ditolak
+          </span>
+        );
+      default:
+        return (
+          <span className="flex items-center gap-1 text-[10px] text-amber-600 font-bold">
+            <Clock className="w-3.5 h-3.5 animate-pulse" />
+            Diproses
+          </span>
+        );
+    }
+  };
+
   // Filter pencarian berdasarkan nama, NIK, atau nomor surat
   const filteredSurat = listSurat.filter((item) => {
     const q = searchQuery.toLowerCase();
-    const nama = item.detail_tambahan?.nama_pemohon?.toLowerCase() || '';
+    const nama = item.warga?.nama?.toLowerCase() || '';
     const noSurat = item.no_surat?.toLowerCase() || '';
     const nik = item.nik_warga?.toLowerCase() || '';
     const jenis = item.jenis_surat?.toLowerCase() || '';
@@ -163,14 +280,14 @@ export default function SuratPage() {
                     {surat.jenis_surat.replace(/_/g, ' ')}
                   </span>
                   <h2 className="text-xs font-bold text-slate-800">
-                    {surat.detail_tambahan?.nama_pemohon || 'Warga (Tanpa Nama)'}
+                    {surat.warga?.nama || 'Warga (Tanpa Nama)'}
                   </h2>
                   <p className="text-[10px] font-mono text-slate-400">NIK: {surat.nik_warga}</p>
                 </div>
 
                 <div className="text-right">
                   <span className="text-[10px] font-mono text-slate-500 block">
-                    {surat.no_surat}
+                    {surat.no_surat === 'PENDING' || !surat.no_surat ? 'PENDING' : surat.no_surat}
                   </span>
                   <span className="text-[10px] text-slate-400">
                     {new Date(surat.tanggal_surat).toLocaleDateString('id-ID', {
@@ -187,14 +304,38 @@ export default function SuratPage() {
                 <span className="font-semibold text-slate-700">Keperluan:</span> {surat.keterangan}
               </p>
 
-              {/* Aksi */}
+              {/* Baris Status & Aksi Tombol */}
               <div className="pt-1 flex items-center justify-between border-t border-slate-50 mt-1">
-                <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  Selesai
-                </div>
+                {renderStatusBadge(surat.status)}
 
                 <div className="flex items-center gap-1.5">
+                  {/* Tombol Approve & Tolak untuk surat status pending / diproses */}
+                  {(!surat.status || surat.status.toLowerCase() === 'pending' || surat.status.toLowerCase() === 'diproses') && (
+                    <>
+                      <button
+                        onClick={() => handleUpdateStatus(surat.id, 'disetujui')}
+                        disabled={updatingId === surat.id}
+                        className="flex items-center gap-1 text-[11px] font-semibold text-white bg-emerald-600 hover:bg-emerald-700 px-2.5 py-1.5 rounded-lg transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                      >
+                        {updatingId === surat.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        )}
+                        Approve
+                      </button>
+
+                      <button
+                        onClick={() => handleUpdateStatus(surat.id, 'ditolak')}
+                        disabled={updatingId === surat.id}
+                        className="flex items-center gap-1 text-[11px] font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <XCircle className="w-3.5 h-3.5" />
+                        Tolak
+                      </button>
+                    </>
+                  )}
+
                   {/* Tombol Edit */}
                   <Link
                     href={`/surat/edit/${surat.id}`}
@@ -208,7 +349,7 @@ export default function SuratPage() {
                   <button
                     onClick={() => handleDelete(surat.id)}
                     disabled={deletingId === surat.id}
-                    className="flex items-center gap-1 text-[11px] font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 rounded-lg transition-all disabled:opacity-50 cursor-pointer"
+                    className="flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-rose-600 bg-slate-100 hover:bg-rose-50 px-2.5 py-1.5 rounded-lg transition-all disabled:opacity-50 cursor-pointer"
                   >
                     {deletingId === surat.id ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -218,14 +359,16 @@ export default function SuratPage() {
                     Hapus
                   </button>
 
-                  {/* Tombol Cetak */}
-                  <Link
-                    href={`/surat/cetak/${surat.id}`}
-                    className="flex items-center gap-1 text-[11px] font-semibold text-sky-600 hover:text-sky-700 bg-sky-50 hover:bg-sky-100 px-2.5 py-1.5 rounded-lg transition-all"
-                  >
-                    <Printer className="w-3.5 h-3.5" />
-                    Cetak
-                  </Link>
+                  {/* Tombol Cetak (Hanya aktif jika status disetujui / selesai) */}
+                  {(surat.status?.toLowerCase() === 'disetujui' || surat.status?.toLowerCase() === 'selesai') && (
+                    <Link
+                      href={`/surat/cetak/${surat.id}`}
+                      className="flex items-center gap-1 text-[11px] font-semibold text-sky-600 hover:text-sky-700 bg-sky-50 hover:bg-sky-100 px-2.5 py-1.5 rounded-lg transition-all"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      Cetak
+                    </Link>
+                  )}
                 </div>
               </div>
             </div>

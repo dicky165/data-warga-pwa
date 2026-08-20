@@ -11,9 +11,10 @@ export const config = {
      * Jalankan middleware pada seluruh rute KECUALI:
      * - _next/static (static files)
      * - _next/image (image optimization files)
+     * - api/ (Seluruh API routes seperti /api/auth/login-warga, /api/whatsapp, dll)
+     * - sw.js & workbox-*.js (Service Worker PWA)
      * - favicon.ico, manifest.json, icons/ (PWA assets)
-     * - api/whatsapp (Webhook Bot WA tidak memerlukan cookie sesi browser)
      */
-    '/((?!_next/static|_next/image|favicon.ico|manifest.json|icons/|api/whatsapp).*)',
+    '/((?!_next/static|_next/image|api/|sw\\.js|workbox-.*\\.js|favicon\\.ico|manifest\\.json|icons/).*)',
   ],
 };
