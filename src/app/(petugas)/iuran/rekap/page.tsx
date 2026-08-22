@@ -28,6 +28,7 @@ interface PembayaranItem {
   created_at?: string;
   is_disetor?: boolean;
   tgl_disetor?: string | null;
+  status_setoran?: string | null;
   petugas?: { nama_lengkap: string };
   pencatat_by_id?: string;
   petugas_id?: string;
@@ -48,19 +49,14 @@ function RekapIuranContent() {
   const [filterStatus, setFilterStatus] = useState<'semua' | 'belum' | 'sudah'>('semua');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Ringkasan Nominal
   const [totalBelum, setTotalBelum] = useState(0);
   const [totalSudah, setTotalSudah] = useState(0);
 
-  // Rincian Riwayat & ID Belum Disetor
   const [listPembayaran, setListPembayaran] = useState<PembayaranItem[]>([]);
   const [unsubmittedIds, setUnsubmittedIds] = useState<number[]>([]);
 
-  // 1. Logout Handler
   const handleLogout = async () => {
-    const confirmLogout = window.confirm('Apakah Anda yakin ingin keluar dari akun petugas?');
-    if (!confirmLogout) return;
-
+    if (!window.confirm('Apakah Anda yakin ingin keluar dari akun petugas?')) return;
     setLoggingOut(true);
     try {
       await supabase.auth.signOut();
@@ -72,7 +68,6 @@ function RekapIuranContent() {
     }
   };
 
-  // 2. Fetch Ringkasan dan Transaksi KHUSUS Petugas Login
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -88,7 +83,6 @@ function RekapIuranContent() {
         dataPetugas.forEach((p) => pengurusMap.set(p.id, p.nama_lengkap));
       }
 
-      // Query data pembayaran milik petugas
       const { data: listData, error } = await supabase
         .from('pembayaran_iuran')
         .select('*')
@@ -108,7 +102,10 @@ function RekapIuranContent() {
             lumsumSudah += nominal;
           } else {
             lumsumBelum += nominal;
-            pendingIds.push(item.id);
+            // Ambil ID transaksi yang belum disetor penuh/approved
+            if (item.status_setoran !== 'APPROVED') {
+              pendingIds.push(item.id);
+            }
           }
 
           const targetId = item.petugas_id || item.pencatat_by_id;
@@ -138,35 +135,42 @@ function RekapIuranContent() {
     fetchData();
   }, [fetchData]);
 
-  // 3. Setorkan Kas Berdasarkan Array ID Transaksi
+  // FIX: Fungsi pengajuan setoran kas ke Bendahara
   const handleSetorKeBendahara = async () => {
     if (unsubmittedIds.length === 0 || totalBelum <= 0) return;
     
     const confirmSetor = window.confirm(
-      `Apakah Anda yakin ingin menyetorkan kas fisik sebesar Rp ${totalBelum.toLocaleString('id-ID')} (${unsubmittedIds.length} transaksi) ke Bendahara?`
+      `Apakah Anda yakin ingin mengajukan setoran kas fisik sebesar Rp ${totalBelum.toLocaleString('id-ID')} (${unsubmittedIds.length} transaksi) ke Bendahara?`
     );
     if (!confirmSetor) return;
 
     setSubmitting(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        alert('Sesi login berakhir. Silakan login kembali.');
+        return;
+      }
 
-      const { error } = await supabase
+      // Update status_setoran ke 'PENDING' dan isi id_petugas_penyetor
+      const { data, error } = await supabase
         .from('pembayaran_iuran')
         .update({
-          is_disetor: true,
-          tgl_disetor: new Date().toISOString(),
+          status_setoran: 'PENDING',
           id_petugas_penyetor: user.id,
         })
-        .in('id', unsubmittedIds);
+        .in('id', unsubmittedIds)
+        .select();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error Supabase Update:', error);
+        throw new Error(error.message);
+      }
 
-      alert('✅ Kas tunai telah berhasil ditandai Lunas Disetorkan ke Bendahara!');
+      alert('✅ Setoran kas berhasil diajukan! Silakan temui Bendahara untuk serah terima kas.');
       fetchData();
     } catch (err: any) {
-      alert('Gagal memperbarui status setoran: ' + err.message);
+      alert('Gagal mengajukan setoran: ' + err.message + '\n\nPastikan Policy RLS Supabase mengizinkan Update.');
     } finally {
       setSubmitting(false);
     }
@@ -181,7 +185,6 @@ function RekapIuranContent() {
     });
   };
 
-  // Filter List Pembayaran
   const filteredList = listPembayaran.filter((item) => {
     const matchStatus =
       filterStatus === 'semua' ? true : filterStatus === 'belum' ? !item.is_disetor : item.is_disetor;
@@ -193,7 +196,7 @@ function RekapIuranContent() {
 
   return (
     <div className="space-y-4 max-w-md mx-auto">
-      {/* Header dengan Tombol Refresh & Logout */}
+      {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div>
           <h2 className="text-base font-bold text-slate-800 flex items-center gap-1.5">
@@ -271,7 +274,7 @@ function RekapIuranContent() {
             className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 disabled:opacity-50"
           >
             <Wallet className="w-4 h-4" />
-            <span>{submitting ? 'Memproses...' : 'Setorkan Kas ke Bendahara'}</span>
+            <span>{submitting ? 'Memproses Update...' : 'Setorkan Kas ke Bendahara'}</span>
             <ArrowUpRight className="w-4 h-4" />
           </button>
         </div>
@@ -318,7 +321,7 @@ function RekapIuranContent() {
         </div>
       </div>
 
-      {/* Riwayat Daftar Transaksi */}
+      {/* List Transaksi */}
       <div className="space-y-2">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-10 text-slate-400 gap-2">
@@ -365,9 +368,13 @@ function RekapIuranContent() {
                   <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-md">
                     <CheckCircle2 className="w-2.5 h-2.5" /> Disetor
                   </span>
-                ) : (
+                ) : item.status_setoran === 'PENDING' ? (
                   <span className="inline-flex items-center gap-1 text-[9px] font-bold text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded-md">
-                    <Clock className="w-2.5 h-2.5" /> Di Petugas
+                    <Clock className="w-2.5 h-2.5" /> Menunggu Bendahara
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[9px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                    <Clock className="w-2.5 h-2.5" /> Belum Diajukan
                   </span>
                 )}
               </div>

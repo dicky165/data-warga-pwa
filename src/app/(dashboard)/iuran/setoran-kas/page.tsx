@@ -14,7 +14,8 @@ import {
   Loader2, 
   Calendar,
   Wallet,
-  Building2
+  Building2,
+  AlertCircle
 } from 'lucide-react';
 
 interface PembayaranItem {
@@ -28,7 +29,9 @@ interface PembayaranItem {
   tgl_disetor?: string | null;
   pencatat_by_id?: string;
   petugas_id?: string;
+  id_petugas_penyetor?: string;
   petugas_nama?: string;
+  status_setoran?: string | null;
 }
 
 interface PetugasSummary {
@@ -52,16 +55,14 @@ function SetoranKasContent() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'menunggu' | 'riwayat'>('menunggu');
 
-  // Grouped Summary Data
   const [petugasSummaries, setPetugasSummaries] = useState<PetugasSummary[]>([]);
   const [riwayatDisetor, setRiwayatDisetor] = useState<PembayaranItem[]>([]);
   const [totalKasDiLapangan, setTotalKasDiLapangan] = useState(0);
 
-  // Fetch Data Transaksi untuk Bendahara
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Fetch Profil Pengurus/Petugas
+      // 1. Fetch Profil Pengurus
       const { data: dataPetugas } = await supabase
         .from('profil_pengurus')
         .select('id, nama_lengkap');
@@ -85,8 +86,9 @@ function SetoranKasContent() {
         let grandTotalBelum = 0;
 
         listData.forEach((item: any) => {
-          const targetId = item.pencatat_by_id || item.petugas_id || 'unknown';
-          const namaPetugas = pengurusMap.get(targetId) || 'Petugas Penagih';
+          // Priority fallback untuk mengelompokkan ID Petugas Penyetor
+          const targetId = item.id_petugas_penyetor || item.petugas_id || item.pencatat_by_id || 'unknown';
+          const namaPetugas = pengurusMap.get(targetId) || 'Petugas Lapangan';
           const nominal = Number(item.jumlah_bayar || 0);
 
           const formattedItem: PembayaranItem = {
@@ -99,20 +101,23 @@ function SetoranKasContent() {
           } else {
             grandTotalBelum += nominal;
 
-            if (!groupedMap.has(targetId)) {
-              groupedMap.set(targetId, {
-                petugasId: targetId,
-                namaPetugas: namaPetugas,
-                totalNominalBelum: 0,
-                totalTransaksiBelum: 0,
-                items: []
-              });
-            }
+            // Ditolak / Draf tidak tampil di "Perlu Diterima", hanya status PENDING yang tampil
+            if (item.status_setoran === 'PENDING') {
+              if (!groupedMap.has(targetId)) {
+                groupedMap.set(targetId, {
+                  petugasId: targetId,
+                  namaPetugas: namaPetugas,
+                  totalNominalBelum: 0,
+                  totalTransaksiBelum: 0,
+                  items: []
+                });
+              }
 
-            const current = groupedMap.get(targetId)!;
-            current.totalNominalBelum += nominal;
-            current.totalTransaksiBelum += 1;
-            current.items.push(formattedItem);
+              const current = groupedMap.get(targetId)!;
+              current.totalNominalBelum += nominal;
+              current.totalTransaksiBelum += 1;
+              current.items.push(formattedItem);
+            }
           }
         });
 
@@ -131,7 +136,7 @@ function SetoranKasContent() {
     fetchData();
   }, [fetchData]);
 
-  // Bendahara Mengonfirmasi Terima Kas dari Petugas Tertentu
+  // Bendahara Mengonfirmasi Terima Kas
   const handleKonfirmasiTerimaKas = async (summary: PetugasSummary) => {
     const confirmTerima = window.confirm(
       `Apakah Anda yakin telah menerima uang tunai sebesar Rp ${summary.totalNominalBelum.toLocaleString('id-ID')} dari ${summary.namaPetugas}?`
@@ -143,20 +148,21 @@ function SetoranKasContent() {
       const { data: userData } = await supabase.auth.getUser();
       const bendaharaId = userData?.user?.id;
 
-      // Update seluruh transaksi milik petugas tersebut yang belum disetor
+      const itemIds = summary.items.map((i) => i.id);
+
       const { error } = await supabase
         .from('pembayaran_iuran')
         .update({
           is_disetor: true,
+          status_setoran: 'APPROVED',
           tgl_disetor: new Date().toISOString(),
-          id_petugas_penyetor: summary.petugasId,
+          id_bendahara_penerima: bendaharaId,
         })
-        .eq('is_disetor', false)
-        .or(`pencatat_by_id.eq.${summary.petugasId},petugas_id.eq.${summary.petugasId}`);
+        .in('id', itemIds);
 
       if (error) throw error;
 
-      alert(`✅ Setoran kas dari ${summary.namaPetugas} berhasil dikonfirmasi dan masuk Kas Utama!`);
+      alert(`✅ Setoran kas dari ${summary.namaPetugas} berhasil dikonfirmasi!`);
       fetchData();
     } catch (err: any) {
       alert('Gagal mengonfirmasi setoran kas: ' + err.message);
@@ -174,7 +180,6 @@ function SetoranKasContent() {
     });
   };
 
-  // Filter List Riwayat
   const filteredRiwayat = riwayatDisetor.filter((item) => {
     return (
       item.no_kk?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -204,7 +209,7 @@ function SetoranKasContent() {
         </button>
       </div>
 
-      {/* Ringkasan Kas yang Harus Diterima */}
+      {/* Ringkasan Kas Total Di Lapangan */}
       <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-2xl p-4 text-white shadow-md flex items-center justify-between">
         <div className="space-y-0.5">
           <p className="text-[11px] font-medium text-amber-100 flex items-center gap-1">
@@ -244,7 +249,7 @@ function SetoranKasContent() {
         </button>
       </div>
 
-      {/* Content Tab 1: Menunggu Konfirmasi (Grouped per Petugas) */}
+      {/* Tab 1: Menunggu Konfirmasi */}
       {activeTab === 'menunggu' && (
         <div className="space-y-3">
           {loading ? (
@@ -253,15 +258,18 @@ function SetoranKasContent() {
               <span className="text-xs">Memuat data setoran...</span>
             </div>
           ) : petugasSummaries.length === 0 ? (
-            <div className="bg-white rounded-2xl p-8 text-center border border-slate-100 shadow-sm text-slate-400 text-xs">
-              <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
-              Semua kas lapangan dari petugas telah disetorkan.
+            <div className="bg-white rounded-2xl p-8 text-center border border-slate-100 shadow-sm text-slate-400 text-xs space-y-1">
+              <AlertCircle className="w-8 h-8 text-amber-500 mx-auto opacity-80" />
+              <p className="font-semibold text-slate-700">Belum Ada Pengajuan Setoran</p>
+              <p className="text-[11px] text-slate-400">
+                Belum ada petugas yang mengajukan penyerahan uang kas.
+              </p>
             </div>
           ) : (
             petugasSummaries.map((summary) => (
               <div
                 key={summary.petugasId}
-                className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm space-y-3"
+                className="bg-white rounded-2xl p-4 border border-amber-200 shadow-sm space-y-3"
               >
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                   <div className="flex items-center gap-2">
@@ -270,8 +278,8 @@ function SetoranKasContent() {
                     </div>
                     <div>
                       <h3 className="font-bold text-xs text-slate-800">{summary.namaPetugas}</h3>
-                      <p className="text-[10px] text-slate-400">
-                        {summary.totalTransaksiBelum} Transaksi Belum Disetor
+                      <p className="text-[10px] text-amber-600 font-semibold">
+                        Mengajukan setoran ({summary.totalTransaksiBelum} Transaksi)
                       </p>
                     </div>
                   </div>
@@ -282,7 +290,6 @@ function SetoranKasContent() {
                   </div>
                 </div>
 
-                {/* Tombol Terima Uang */}
                 <button
                   onClick={() => handleKonfirmasiTerimaKas(summary)}
                   disabled={submittingId === summary.petugasId}
@@ -301,7 +308,7 @@ function SetoranKasContent() {
         </div>
       )}
 
-      {/* Content Tab 2: Riwayat Diterima */}
+      {/* Tab 2: Riwayat Diterima */}
       {activeTab === 'riwayat' && (
         <div className="space-y-3">
           <div className="relative w-full">

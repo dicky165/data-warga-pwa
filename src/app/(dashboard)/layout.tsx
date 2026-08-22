@@ -3,7 +3,18 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, PlusCircle, Receipt, Users, Coins, LogOut, Mail, Megaphone, HandCoins } from 'lucide-react';
+import { 
+  Home, 
+  PlusCircle, 
+  Receipt, 
+  Users, 
+  Coins, 
+  LogOut, 
+  Mail, 
+  Megaphone, 
+  HandCoins, 
+  AlertCircle 
+} from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 
 export default function DashboardLayout({
@@ -18,6 +29,7 @@ export default function DashboardLayout({
   // State untuk menyimpan jumlah antrean notification
   const [pendingSuratCount, setPendingSuratCount] = useState<number>(0);
   const [unsubmittedIuranCount, setUnsubmittedIuranCount] = useState<number>(0);
+  const [pendingLaporanCount, setPendingLaporanCount] = useState<number>(0);
 
   // Fungsi Fetch Hitungan Data Pending
   const fetchCounts = async () => {
@@ -36,6 +48,14 @@ export default function DashboardLayout({
       .eq('is_disetor', false);
 
     setUnsubmittedIuranCount(iuranCount || 0);
+
+    // 3. Hitung Laporan Kejadian yang berstatus 'PENDING'
+    const { count: laporanCount } = await supabase
+      .from('laporan_kejadian')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'PENDING');
+
+    setPendingLaporanCount(laporanCount || 0);
   };
 
   useEffect(() => {
@@ -52,6 +72,11 @@ export default function DashboardLayout({
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'pembayaran_iuran' },
+        () => fetchCounts()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'laporan_kejadian' },
         () => fetchCounts()
       )
       .subscribe();
@@ -126,6 +151,24 @@ export default function DashboardLayout({
 
         {/* Action Buttons Header */}
         <div className="flex items-center gap-1.5">
+          {/* Shortcut Laporan Admin */}
+          <Link
+            href="/laporan-admin"
+            title="Laporan Admin"
+            className={`relative p-2 rounded-xl transition-all flex items-center gap-1 ${
+              pathname.startsWith('/laporan-admin')
+                ? 'bg-rose-100 text-rose-600 font-semibold'
+                : 'bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-600'
+            }`}
+          >
+            <AlertCircle className="w-4 h-4" />
+            {pendingLaporanCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[9px] font-bold h-4 min-w-[16px] px-1 rounded-full flex items-center justify-center border-2 border-white animate-pulse">
+                {pendingLaporanCount > 99 ? '99+' : pendingLaporanCount}
+              </span>
+            )}
+          </Link>
+
           {/* Shortcut Konfirmasi Setoran Kas Petugas */}
           <Link
             href="/iuran/setoran-kas"

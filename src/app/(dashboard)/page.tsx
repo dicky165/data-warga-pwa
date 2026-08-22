@@ -77,18 +77,19 @@ function DashboardContent() {
         }
 
         // ---------------------------------------------------------------------
-        // 2. Ambil Data Pembayaran Iuran
+        // 2. Ambil Data Pembayaran Iuran (HANYA YANG SUDAH DISETOR KE BENDAHARA)
         // ---------------------------------------------------------------------
         const { data: dataPembayaran, error: errPembayaran } = await supabase
           .from('pembayaran_iuran')
-          .select('no_kk, jumlah_bayar, periode_bulan, periode_tahun, created_at');
+          .select('no_kk, jumlah_bayar, periode_bulan, periode_tahun, created_at, tgl_disetor')
+          .eq('is_disetor', true); // FIX: Filter hanya iuran yang sudah resmi disetorkan ke Bendahara
 
         if (errPembayaran) {
           console.warn('Warning pembayaran iuran:', errPembayaran.message);
         }
 
         // ---------------------------------------------------------------------
-        // 3. Map Pemasukan per No KK & Hitung Total Keuangan
+        // 3. Map Pemasukan per No KK & Hitung Total Keuangan Kas Utama
         // ---------------------------------------------------------------------
         const mapTotalBayarPerKK: { [no_kk: string]: number } = {};
         let totalMasuk = 0;
@@ -104,9 +105,12 @@ function DashboardContent() {
               mapTotalBayarPerKK[kkKey] = (mapTotalBayarPerKK[kkKey] || 0) + nominal;
             }
 
+            // Hitung pemasukan bulan ini berdasarkan tgl_disetor (atau created_at jika null)
+            const targetDateStr = p.tgl_disetor || p.created_at;
+            const targetDate = new Date(targetDateStr);
             const isThisMonth = p.periode_bulan 
               ? (p.periode_bulan === currentMonth && p.periode_tahun === currentYear)
-              : (new Date(p.created_at).getMonth() + 1 === currentMonth && new Date(p.created_at).getFullYear() === currentYear);
+              : (targetDate.getMonth() + 1 === currentMonth && targetDate.getFullYear() === currentYear);
 
             if (isThisMonth) {
               masukBulan += nominal;
@@ -123,7 +127,6 @@ function DashboardContent() {
           const uniqueKKSet = new Set<string>();
 
           dataWarga.forEach((warga: any) => {
-            // EKSTRAKSI RT & RW DARI RELASI TABEL KARTU KELUARGA / WILAYAH
             const wil = Array.isArray(warga.kartu_keluarga?.wilayah_rt_rw) 
               ? warga.kartu_keluarga?.wilayah_rt_rw[0] 
               : warga.kartu_keluarga?.wilayah_rt_rw;
@@ -334,7 +337,7 @@ function DashboardContent() {
         </div>
       </div>
 
-      {/* Section Sebaran RT - Masing-masing terpisah dalam Card terpisah */}
+      {/* Section Sebaran RT */}
       <div className="space-y-3">
         <div className="flex items-center justify-between px-1">
           <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">

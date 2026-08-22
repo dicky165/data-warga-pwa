@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PlusCircle, Receipt, User } from 'lucide-react';
+import { PlusCircle, Receipt, User, AlertCircle } from 'lucide-react';
 
 export default function PetugasLayout({
   children,
@@ -22,6 +22,11 @@ export default function PetugasLayout({
       label: 'Rekap',
       href: '/iuran/rekap',
       icon: Receipt,
+    },
+    {
+      label: 'Laporan',
+      href: '/laporan-petugas',
+      icon: AlertCircle,
     },
     {
       label: 'Akun',

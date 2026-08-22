@@ -106,6 +106,9 @@ function IuranContent() {
   const [filterTahun, setFilterTahun] = useState<number>(2026);
   const [mounted, setMounted] = useState(false);
   
+  // State Role User
+  const [userRole, setUserRole] = useState<string>('PENGURUS');
+
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // State Modal Detail Riwayat Pembayaran Warga
@@ -121,8 +124,8 @@ function IuranContent() {
   const [formData, setFormData] = useState({
     id_iuran: '',
     no_kk: '',
-    tarif_per_bulan: '', // Tarif resmi per bulan
-    total_uang_diterima: '', // Total uang yang dibayarkan warga
+    tarif_per_bulan: '',
+    total_uang_diterima: '',
     periode_bulan: '1',
     periode_tahun: '2026'
   });
@@ -154,6 +157,20 @@ function IuranContent() {
 
     try {
       const supabase = createClient();
+
+      // 0. Cek Role User Logged In
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profil_pengurus')
+          .select('role')
+          .eq('id', user.id)
+          .single();
+
+        if (profile?.role) {
+          setUserRole(String(profile.role).toUpperCase());
+        }
+      }
 
       // 1. Fetch Master Jenis Iuran
       const { data: dataIuran, error: errorIuran } = await supabase
@@ -212,7 +229,6 @@ function IuranContent() {
         defaultNamaPengurus = dataPetugas[0].nama_lengkap;
       }
 
-      const { data: { user } } = await supabase.auth.getUser();
       if (user && pengurusMap.has(user.id)) {
         defaultNamaPengurus = pengurusMap.get(user.id)!;
       }
@@ -352,7 +368,11 @@ function IuranContent() {
     return { tarif: tarifDefault, catatan: `Pilihan ${pilihan} (Default)` };
   };
 
+  const isPetugas = userRole === 'PETUGAS' || userRole === 'ADMIN' || userRole === 'SUPERADMIN';
+
   const handleOpenQuickPay = (noKk: string = '', idIuran: string = '', defaultNominalBayar: number = 0) => {
+    if (!isPetugas) return; // Hanya petugas yang bisa membuka modal bayar
+
     let tarifPerBulanVal = defaultNominalBayar;
 
     if (noKk && idIuran) {
@@ -375,7 +395,6 @@ function IuranContent() {
     setIsModalOpen(true);
   };
 
-  // Membuka Modal Detail Riwayat Pembayaran saat nama warga diklik
   const handleOpenDetailModal = (nama: string, noKk: string, wilayah: string) => {
     const historyPembayaran = listPembayaran
       .filter((p) => p.no_kk === noKk)
@@ -390,7 +409,6 @@ function IuranContent() {
     setIsDetailModalOpen(true);
   };
 
-  // Logika Kalkulasi Pecahan Distribusi Uang Berdasarkan Periode Terpilih
   const hitungDistribusiUang = () => {
     const tarifNominal = parseFloat(formData.tarif_per_bulan) || 0;
     let totalUang = parseFloat(formData.total_uang_diterima) || 0;
@@ -401,12 +419,10 @@ function IuranContent() {
 
     const rincian: { bulan: number; tahun: number; nominalAlokasi: number; status: string }[] = [];
 
-    // Ambil histori pembayaran transaksi KK ini untuk jenis iuran terkait
     const pembayaranKK = listPembayaran.filter(
       (p) => p.no_kk === formData.no_kk && String(p.id_iuran) === formData.id_iuran
     );
 
-    // Map total pembayaran yang sudah pernah tercatat per bulan-tahun
     const periodeMap = new Map<string, number>();
     pembayaranKK.forEach((p) => {
       const key = `${p.periode_tahun}-${p.periode_bulan}`;
@@ -416,13 +432,11 @@ function IuranContent() {
     let curBulan = selectedBulan;
     let curTahun = selectedTahun;
 
-    // Mulai alokasikan uang dari bulan & tahun yang dipilih oleh petugas
     while (totalUang > 0) {
       const key = `${curTahun}-${curBulan}`;
       const sudahDibayar = periodeMap.get(key) || 0;
       const kurang = tarifNominal - sudahDibayar;
 
-      // Jika bulan ini sudah lunas sebelumnya, lewati ke bulan berikutnya
       if (kurang <= 0) {
         curBulan++;
         if (curBulan > 12) {
@@ -467,6 +481,11 @@ function IuranContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isPetugas) {
+      alert('Akses Ditolak: Pengurus tidak memiliki akses untuk mencatat pelunasan.');
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -527,24 +546,25 @@ function IuranContent() {
   };
 
   const handleDelete = async (id: number) => {
-  if (confirm('Apakah Anda yakin ingin menghapus catatan pembayaran ini?')) {
-    const supabase = createClient();
-    
-    // Panggil delete dan ambil response error-nya
-    const { error } = await supabase
-      .from('pembayaran_iuran')
-      .delete()
-      .eq('id', id);
+    if (!isPetugas) return;
 
-    if (error) {
-      console.error('Error saat menghapus:', error);
-      alert(`Gagal menghapus catatan pembayaran: ${error.message}`);
-    } else {
-      alert('Data pembayaran berhasil dihapus!');
-      fetchData(); // Refresh data tampilan
+    if (confirm('Apakah Anda yakin ingin menghapus catatan pembayaran ini?')) {
+      const supabase = createClient();
+      
+      const { error } = await supabase
+        .from('pembayaran_iuran')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error saat menghapus:', error);
+        alert(`Gagal menghapus catatan pembayaran: ${error.message}`);
+      } else {
+        alert('Data pembayaran berhasil dihapus!');
+        fetchData();
+      }
     }
-  }
-};
+  };
 
   const reportData = listKK.map((kk) => {
     const listWarga = getAnggotaWarga(kk);
@@ -633,14 +653,18 @@ function IuranContent() {
             Periode: {mounted ? BULAN_LIST[filterBulan - 1] : ''} {mounted ? filterTahun : ''}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => handleOpenQuickPay()}
-          className="flex items-center gap-1.5 px-3 py-2 bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs rounded-xl shadow-sm transition-all active:scale-95"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Bayar Iuran</span>
-        </button>
+        
+        {/* Tombol hanya dimunculkan jika user adalah Petugas / Admin */}
+        {isPetugas && (
+          <button
+            type="button"
+            onClick={() => handleOpenQuickPay()}
+            className="flex items-center gap-1.5 px-3 py-2 bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs rounded-xl shadow-sm transition-all active:scale-95"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Bayar Iuran</span>
+          </button>
+        )}
       </div>
 
       <div className="flex flex-col gap-2">
@@ -788,29 +812,43 @@ function IuranContent() {
                         )}
 
                         {iuran.status === 'BELUM_LUNAS' && (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenQuickPay(kk.no_kk, String(iuran.master_id), iuran.sisa_kekurangan)}
-                            className="flex items-center gap-1 text-amber-600 font-bold bg-amber-100/70 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all active:scale-95 cursor-pointer"
-                            title="Klik untuk melunasi kekurangan"
-                          >
-                            <AlertCircle className="w-3.5 h-3.5" />
-                            <span>Kurang Rp {iuran.sisa_kekurangan.toLocaleString('id-ID')}</span>
-                          </button>
+                          isPetugas ? (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenQuickPay(kk.no_kk, String(iuran.master_id), iuran.sisa_kekurangan)}
+                              className="flex items-center gap-1 text-amber-600 font-bold bg-amber-100/70 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all active:scale-95 cursor-pointer"
+                              title="Klik untuk melunasi kekurangan"
+                            >
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              <span>Kurang Rp {iuran.sisa_kekurangan.toLocaleString('id-ID')}</span>
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1 text-amber-600 font-bold bg-amber-100/70 px-2.5 py-1 rounded-lg">
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              <span>Kurang Rp {iuran.sisa_kekurangan.toLocaleString('id-ID')}</span>
+                            </div>
+                          )
                         )}
 
                         {iuran.status === 'BELUM_BAYAR' && (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenQuickPay(kk.no_kk, String(iuran.master_id), iuran.sisa_kekurangan)}
-                            className="flex items-center gap-1 text-rose-600 font-bold bg-rose-100/70 hover:bg-rose-200/80 px-2.5 py-1 rounded-lg transition-all active:scale-95 cursor-pointer"
-                          >
-                            <XCircle className="w-3.5 h-3.5" />
-                            <span>Belum Dibayar</span>
-                          </button>
+                          isPetugas ? (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenQuickPay(kk.no_kk, String(iuran.master_id), iuran.sisa_kekurangan)}
+                              className="flex items-center gap-1 text-rose-600 font-bold bg-rose-100/70 hover:bg-rose-200/80 px-2.5 py-1 rounded-lg transition-all active:scale-95 cursor-pointer"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>Belum Dibayar</span>
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1 text-rose-600 font-bold bg-rose-100/70 px-2.5 py-1 rounded-lg">
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>Belum Dibayar</span>
+                            </div>
+                          )
                         )}
 
-                        {iuran.transaksiList.map((tr) => (
+                        {isPetugas && iuran.transaksiList.map((tr) => (
                           <button
                             key={tr.id}
                             type="button"
@@ -933,7 +971,7 @@ function IuranContent() {
       )}
 
       {/* Modal Form Pembayaran */}
-      {isModalOpen && (
+      {isModalOpen && isPetugas && (
         <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex justify-center items-end sm:items-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl pb-8 sm:pb-5 max-h-[90vh] overflow-y-auto">
             

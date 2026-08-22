@@ -125,7 +125,7 @@ export default function MasterIuranPage() {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // EXPORT ENGINE (Penarikan Nama Petugas yang Tepat Berdasarkan Schema DB)
+  // EXPORT ENGINE (Dengan Detail Status Penyerahan ke Bendahara)
   // ---------------------------------------------------------------------------
   const prepareExportData = async () => {
     try {
@@ -139,7 +139,7 @@ export default function MasterIuranPage() {
 
       if (errMaster) throw new Error(`Tabel master_iuran: ${errMaster.message}`);
 
-      // 2. Ambil Profil Pengurus (Sesuai dengan dashboard/iuran/page.tsx)
+      // 2. Ambil Profil Pengurus
       const { data: dataPetugas, error: errPetugas } = await supabase
         .from('profil_pengurus')
         .select('id, nama_lengkap');
@@ -154,14 +154,12 @@ export default function MasterIuranPage() {
       if (dataPetugas && dataPetugas.length > 0) {
         dataPetugas.forEach((p: any) => {
           if (p.id && p.nama_lengkap) {
-            // Lowercase & trim untuk menghindari perbedaan format UUID
             pengurusMap.set(String(p.id).toLowerCase().trim(), p.nama_lengkap);
           }
         });
         defaultNamaPengurus = dataPetugas[0].nama_lengkap;
       }
 
-      // Ambil user auth yang sedang login (seperti di iuran/page.tsx)
       const { data: { user } } = await supabase.auth.getUser();
       if (user && user.id) {
         const cleanUserId = String(user.id).toLowerCase().trim();
@@ -179,7 +177,6 @@ export default function MasterIuranPage() {
       if (errWarga) throw new Error(`Tabel data_warga: ${errWarga.message}`);
       if (!dataWarga || dataWarga.length === 0) throw new Error('Data warga kosong');
 
-      // Kelompokkan Warga berdasarkan Kepala Keluarga (no_kk)
       const kkMap = new Map<string, any>();
       dataWarga.forEach((warga: any) => {
         const keyKK = (warga.no_kk || warga.nik || 'TANPA_KK').trim();
@@ -199,7 +196,6 @@ export default function MasterIuranPage() {
 
       if (errPembayaran) throw new Error(`Tabel pembayaran_iuran: ${errPembayaran.message}`);
 
-      // Helper untuk mendapatkan nama petugas dengan fallback ke defaultNamaPengurus
       const getNamaPetugas = (lb: any) => {
         const rawId = lb.petugas_id || lb.pencatat_by_id;
         if (!rawId) return defaultNamaPengurus;
@@ -208,21 +204,41 @@ export default function MasterIuranPage() {
         return pengurusMap.get(cleanId) || defaultNamaPengurus;
       };
 
-      // 5. Akumulasi Rekap Uang per Petugas
-      const rekapPetugasMap = new Map<string, number>();
+      // 5. Akumulasi Rekap & Status Penyerahan
+      let totalSeharusnyaAda = 0;
+      let totalSudahDiserahkan = 0;
+      let totalBelumDiserahkan = 0;
+
+      const rekapPetugasMap = new Map<string, { total: number; diserahkan: number; belum: number }>();
+
       pembayaran?.forEach((p: any) => {
         const nominal = Number(p.jumlah_bayar || 0);
-        const namaPetugas = getNamaPetugas(p);
+        // Checking flag status penyerahan
+        const isDiserahkan = Boolean(p.is_diserahkan || p.status_setor === 'diserahkan' || p.is_settled);
 
-        const currentTotal = rekapPetugasMap.get(namaPetugas) || 0;
-        rekapPetugasMap.set(namaPetugas, currentTotal + nominal);
+        totalSeharusnyaAda += nominal;
+        if (isDiserahkan) {
+          totalSudahDiserahkan += nominal;
+        } else {
+          totalBelumDiserahkan += nominal;
+        }
+
+        const namaPetugas = getNamaPetugas(p);
+        const curr = rekapPetugasMap.get(namaPetugas) || { total: 0, diserahkan: 0, belum: 0 };
+
+        rekapPetugasMap.set(namaPetugas, {
+          total: curr.total + nominal,
+          diserahkan: curr.diserahkan + (isDiserahkan ? nominal : 0),
+          belum: curr.belum + (!isDiserahkan ? nominal : 0)
+        });
       });
 
-      const rekapPetugasRows = Array.from(rekapPetugasMap.entries()).map(([namaPetugas, totalUang], idx) => ({
+      const rekapPetugasRows = Array.from(rekapPetugasMap.entries()).map(([namaPetugas, val], idx) => ({
         no: idx + 1,
         nama_petugas: namaPetugas,
-        total_terkumpul: `Rp ${totalUang.toLocaleString('id-ID')}`,
-        raw_total: totalUang
+        total_terkumpul: `Rp ${val.total.toLocaleString('id-ID')}`,
+        sudah_diserahkan: `Rp ${val.diserahkan.toLocaleString('id-ID')}`,
+        belum_diserahkan: `Rp ${val.belum.toLocaleString('id-ID')}`
       }));
 
       // 6. Matriks Rekap Utama Per Warga
@@ -244,7 +260,10 @@ export default function MasterIuranPage() {
             const rincianTransaksi = logBayar.map((lb: any) => {
               const nominal = Number(lb.jumlah_bayar || 0);
               const namaPenagih = getNamaPetugas(lb);
-              return `Rp ${nominal.toLocaleString('id-ID')} [Penerima: ${namaPenagih}]`;
+              const st = Boolean(lb.is_diserahkan || lb.status_setor === 'diserahkan' || lb.is_settled) 
+                ? 'Diserahkan' 
+                : 'Di Petugas';
+              return `Rp ${nominal.toLocaleString('id-ID')} [${namaPenagih} - ${st}]`;
             }).join('; ');
 
             rowObj[iuran.nama_iuran] = rincianTransaksi;
@@ -256,7 +275,16 @@ export default function MasterIuranPage() {
         return rowObj;
       });
 
-      return { masterIuran: masterIuran || [], rows, rekapPetugasRows };
+      return { 
+        masterIuran: masterIuran || [], 
+        rows, 
+        rekapPetugasRows,
+        summary: {
+          totalSeharusnyaAda,
+          totalSudahDiserahkan,
+          totalBelumDiserahkan
+        }
+      };
     } catch (error: any) {
       console.error('Export Error Detail:', error);
       alert(`Gagal menyiapkan data export: ${error.message}`);
@@ -272,15 +300,24 @@ export default function MasterIuranPage() {
 
       const workbook = XLSX.utils.book_new();
 
-      // Sheet 1: Rekap Utama Warga
+      // Sheet 1: Summary Bendahara & Rekap Per Petugas
+      const summarySheetData = [
+        { 'Kategori Kas': 'TOTAL SEHARUSNYA (KAS)', Nominal: rawData.summary.totalSeharusnyaAda },
+        { 'Kategori Kas': 'SUDAH DISERAHKAN KE BENDAHARA', Nominal: rawData.summary.totalSudahDiserahkan },
+        { 'Kategori Kas': 'MASIH DI TANGAN PETUGAS', Nominal: rawData.summary.totalBelumDiserahkan },
+        {},
+        { 'Kategori Kas': '--- REKAP PER PETUGAS ---', Nominal: '' }
+      ];
+
+      const worksheetSummary = XLSX.utils.json_to_sheet(summarySheetData);
+      XLSX.utils.sheet_add_json(worksheetSummary, rawData.rekapPetugasRows, { origin: 'A7' });
+      XLSX.utils.book_append_sheet(workbook, worksheetSummary, 'Ringkasan Kas & Petugas');
+
+      // Sheet 2: Rekap Utama Warga
       const worksheetWarga = XLSX.utils.json_to_sheet(rawData.rows);
       XLSX.utils.book_append_sheet(workbook, worksheetWarga, 'Rekap Iuran Warga');
 
-      // Sheet 2: Rekap Per Petugas
-      const worksheetPetugas = XLSX.utils.json_to_sheet(rawData.rekapPetugasRows);
-      XLSX.utils.book_append_sheet(workbook, worksheetPetugas, 'Rekap Total per Petugas');
-
-      XLSX.writeFile(workbook, `Rekap_Iuran_Lengkap_${new Date().toISOString().split('T')[0]}.xlsx`);
+      XLSX.writeFile(workbook, `Rekap_Kas_Bendahara_${new Date().toISOString().split('T')[0]}.xlsx`);
     } catch (err: any) {
       alert(`Gagal membuat berkas Excel: ${err.message}`);
     } finally {
@@ -296,12 +333,45 @@ export default function MasterIuranPage() {
 
       const doc = new jsPDF({ orientation: 'landscape' });
 
-      // Title
+      // Title & Tanggal
       doc.setFontSize(14);
-      doc.text('REKAPITULASI PEMBAYARAN IURAN WARGA', 14, 15);
+      doc.setFont('helvetica', 'bold');
+      doc.text('REKAPITULASI PEMBAYARAN IURAN WARGA & KAS BENDAHARA', 14, 13);
       doc.setFontSize(9);
-      doc.text(`Tanggal Cetak: ${new Date().toLocaleDateString('id-ID')}`, 14, 21);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Tanggal Cetak: ${new Date().toLocaleDateString('id-ID')}`, 14, 18);
 
+      // --- BOX SUMMARY BENDAHARA ---
+      doc.setDrawColor(200, 200, 200);
+      doc.setFillColor(245, 247, 250);
+      doc.roundedRect(14, 22, 269, 18, 2, 2, 'FD');
+
+      doc.setFontSize(9);
+      
+      // Total Seharusnya Ada
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(30, 41, 59);
+      doc.text('TOTAL SEHARUSNYA (KAS):', 20, 29);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Rp ${rawData.summary.totalSeharusnyaAda.toLocaleString('id-ID')}`, 20, 35);
+
+      // Sudah Diserahkan
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(16, 185, 129); // Emerald
+      doc.text('SUDAH DISERAHKAN KE BENDAHARA:', 100, 29);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Rp ${rawData.summary.totalSudahDiserahkan.toLocaleString('id-ID')}`, 100, 35);
+
+      // Belum Diserahkan
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(225, 29, 72); // Rose / Red
+      doc.text('MASIH DI TANGAN PETUGAS:', 190, 29);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Rp ${rawData.summary.totalBelumDiserahkan.toLocaleString('id-ID')}`, 190, 35);
+
+      doc.setTextColor(0, 0, 0); // Reset color
+
+      // --- TABEL UTAMA (PEMBAYARAN WARGA) ---
       const tableHeaders = [
         'No',
         'Penanggung Jawab (Kepala KK)',
@@ -316,9 +386,8 @@ export default function MasterIuranPage() {
         ...rawData.masterIuran.map((m) => row[m.nama_iuran])
       ]);
 
-      // Tabel Utama Warga
       autoTable(doc, {
-        startY: 25,
+        startY: 44,
         head: [tableHeaders],
         body: tableBody,
         styles: { fontSize: 7, cellPadding: 2 },
@@ -326,25 +395,33 @@ export default function MasterIuranPage() {
         alternateRowStyles: { fillColor: [248, 250, 252] }
       });
 
-      // Spasi untuk Tabel Rekap Petugas
+      // --- TABEL REKAP PETUGAS ---
       const finalY = (doc as any).lastAutoTable.finalY || 100;
-      if (finalY > 160) {
+      if (finalY > 150) {
         doc.addPage();
       }
 
-      const startYPetugas = finalY > 160 ? 20 : finalY + 15;
+      const startYPetugas = finalY > 150 ? 20 : finalY + 12;
 
-      doc.setFontSize(12);
-      doc.text('REKAPITULASI TOTAL UANG TERKUMPUL PER PETUGAS', 14, startYPetugas - 5);
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text('REKAPITULASI POSISI UANG PER PETUGAS', 14, startYPetugas - 4);
 
-      const petugasHeaders = ['No', 'Nama Petugas / Pengambil Iuran', 'Total Uang Terkumpul'];
+      const petugasHeaders = [
+        'No', 
+        'Nama Petugas / Pengambil Iuran', 
+        'Total Terkumpul', 
+        'Sudah Diserahkan', 
+        'Masih di Tangan Petugas'
+      ];
       const petugasBody = rawData.rekapPetugasRows.map((rp: any) => [
         rp.no,
         rp.nama_petugas,
-        rp.total_terkumpul
+        rp.total_terkumpul,
+        rp.sudah_diserahkan,
+        rp.belum_diserahkan
       ]);
 
-      // Tabel Rekap Petugas
       autoTable(doc, {
         startY: startYPetugas,
         head: [petugasHeaders],
@@ -354,7 +431,7 @@ export default function MasterIuranPage() {
         alternateRowStyles: { fillColor: [240, 253, 244] }
       });
 
-      doc.save(`Rekap_Iuran_Lengkap_${new Date().toISOString().split('T')[0]}.pdf`);
+      doc.save(`Rekap_Kas_Bendahara_${new Date().toISOString().split('T')[0]}.pdf`);
     } catch (err: any) {
       alert(`Gagal membuat berkas PDF: ${err.message}`);
     } finally {
