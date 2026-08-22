@@ -4,13 +4,13 @@ export const dynamic = 'force-dynamic';
 
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { 
-  Coins, 
-  Plus, 
-  Trash2, 
-  Edit3, 
-  X, 
-  Loader2, 
+import {
+  Coins,
+  Plus,
+  Trash2,
+  Edit3,
+  X,
+  Loader2,
   Search,
   CheckCircle2,
   XCircle,
@@ -19,7 +19,10 @@ import {
   UserCheck,
   Briefcase,
   Layers,
-  Crown
+  Crown,
+  Percent,
+  Banknote,
+  Gift
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -32,7 +35,7 @@ interface WilayahItem {
 }
 
 interface KelasIuranItem {
-  nama_kelas: string; // 'A' | 'B' | 'C'
+  nama_kelas: string;
   nominal: number;
 }
 
@@ -46,6 +49,9 @@ interface MasterIuranItem {
   max_usia?: number | null;
   wajib_bekerja?: boolean;
   kelas_iuran?: KelasIuranItem[] | null;
+  tipe_fee?: 'none' | 'persen' | 'nominal';
+  persen_fee_petugas?: number;
+  nominal_fee_petugas?: number;
   wilayah_rt_rw?: {
     rt: string;
     rw: string;
@@ -77,7 +83,10 @@ export default function MasterIuranPage() {
       { nama_kelas: 'A', nominal: 0 },
       { nama_kelas: 'B', nominal: 0 },
       { nama_kelas: 'C', nominal: 0 }
-    ] as KelasIuranItem[]
+    ] as KelasIuranItem[],
+    tipe_fee: 'none' as 'none' | 'persen' | 'nominal',
+    persen_fee_petugas: '',
+    nominal_fee_petugas: ''
   });
 
   // Fetch Master Data Iuran & Wilayah
@@ -97,6 +106,9 @@ export default function MasterIuranPage() {
           max_usia,
           wajib_bekerja,
           kelas_iuran,
+          tipe_fee,
+          persen_fee_petugas,
+          nominal_fee_petugas,
           wilayah_rt_rw ( id, rt, rw )
         `)
         .order('id', { ascending: true });
@@ -125,13 +137,12 @@ export default function MasterIuranPage() {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // EXPORT ENGINE (Dengan Detail Status Penyerahan ke Bendahara)
+  // EXPORT ENGINE
   // ---------------------------------------------------------------------------
   const prepareExportData = async () => {
     try {
       const supabase = createClient();
 
-      // 1. Ambil Master Jenis Iuran
       const { data: masterIuran, error: errMaster } = await supabase
         .from('master_iuran')
         .select('id, nama_iuran')
@@ -139,7 +150,6 @@ export default function MasterIuranPage() {
 
       if (errMaster) throw new Error(`Tabel master_iuran: ${errMaster.message}`);
 
-      // 2. Ambil Profil Pengurus
       const { data: dataPetugas, error: errPetugas } = await supabase
         .from('profil_pengurus')
         .select('id, nama_lengkap');
@@ -168,7 +178,6 @@ export default function MasterIuranPage() {
         }
       }
 
-      // 3. Ambil Data Warga
       const { data: dataWarga, error: errWarga } = await supabase
         .from('data_warga')
         .select('*')
@@ -189,7 +198,6 @@ export default function MasterIuranPage() {
       });
       const penanggungJawabList = Array.from(kkMap.values());
 
-      // 4. Ambil Log Pembayaran
       const { data: pembayaran, error: errPembayaran } = await supabase
         .from('pembayaran_iuran')
         .select('*');
@@ -199,12 +207,11 @@ export default function MasterIuranPage() {
       const getNamaPetugas = (lb: any) => {
         const rawId = lb.petugas_id || lb.pencatat_by_id;
         if (!rawId) return defaultNamaPengurus;
-        
+
         const cleanId = String(rawId).toLowerCase().trim();
         return pengurusMap.get(cleanId) || defaultNamaPengurus;
       };
 
-      // 5. Akumulasi Rekap & Status Penyerahan
       let totalSeharusnyaAda = 0;
       let totalSudahDiserahkan = 0;
       let totalBelumDiserahkan = 0;
@@ -213,7 +220,6 @@ export default function MasterIuranPage() {
 
       pembayaran?.forEach((p: any) => {
         const nominal = Number(p.jumlah_bayar || 0);
-        // Checking flag status penyerahan
         const isDiserahkan = Boolean(p.is_diserahkan || p.status_setor === 'diserahkan' || p.is_settled);
 
         totalSeharusnyaAda += nominal;
@@ -241,7 +247,6 @@ export default function MasterIuranPage() {
         belum_diserahkan: `Rp ${val.belum.toLocaleString('id-ID')}`
       }));
 
-      // 6. Matriks Rekap Utama Per Warga
       const rows = penanggungJawabList.map((warga: any, index: number) => {
         const rowObj: any = {
           no: index + 1,
@@ -260,8 +265,8 @@ export default function MasterIuranPage() {
             const rincianTransaksi = logBayar.map((lb: any) => {
               const nominal = Number(lb.jumlah_bayar || 0);
               const namaPenagih = getNamaPetugas(lb);
-              const st = Boolean(lb.is_diserahkan || lb.status_setor === 'diserahkan' || lb.is_settled) 
-                ? 'Diserahkan' 
+              const st = Boolean(lb.is_diserahkan || lb.status_setor === 'diserahkan' || lb.is_settled)
+                ? 'Diserahkan'
                 : 'Di Petugas';
               return `Rp ${nominal.toLocaleString('id-ID')} [${namaPenagih} - ${st}]`;
             }).join('; ');
@@ -275,9 +280,9 @@ export default function MasterIuranPage() {
         return rowObj;
       });
 
-      return { 
-        masterIuran: masterIuran || [], 
-        rows, 
+      return {
+        masterIuran: masterIuran || [],
+        rows,
         rekapPetugasRows,
         summary: {
           totalSeharusnyaAda,
@@ -300,7 +305,6 @@ export default function MasterIuranPage() {
 
       const workbook = XLSX.utils.book_new();
 
-      // Sheet 1: Summary Bendahara & Rekap Per Petugas
       const summarySheetData = [
         { 'Kategori Kas': 'TOTAL SEHARUSNYA (KAS)', Nominal: rawData.summary.totalSeharusnyaAda },
         { 'Kategori Kas': 'SUDAH DISERAHKAN KE BENDAHARA', Nominal: rawData.summary.totalSudahDiserahkan },
@@ -313,7 +317,6 @@ export default function MasterIuranPage() {
       XLSX.utils.sheet_add_json(worksheetSummary, rawData.rekapPetugasRows, { origin: 'A7' });
       XLSX.utils.book_append_sheet(workbook, worksheetSummary, 'Ringkasan Kas & Petugas');
 
-      // Sheet 2: Rekap Utama Warga
       const worksheetWarga = XLSX.utils.json_to_sheet(rawData.rows);
       XLSX.utils.book_append_sheet(workbook, worksheetWarga, 'Rekap Iuran Warga');
 
@@ -333,7 +336,6 @@ export default function MasterIuranPage() {
 
       const doc = new jsPDF({ orientation: 'landscape' });
 
-      // Title & Tanggal
       doc.setFontSize(14);
       doc.setFont('helvetica', 'bold');
       doc.text('REKAPITULASI PEMBAYARAN IURAN WARGA & KAS BENDAHARA', 14, 13);
@@ -341,37 +343,32 @@ export default function MasterIuranPage() {
       doc.setFont('helvetica', 'normal');
       doc.text(`Tanggal Cetak: ${new Date().toLocaleDateString('id-ID')}`, 14, 18);
 
-      // --- BOX SUMMARY BENDAHARA ---
       doc.setDrawColor(200, 200, 200);
       doc.setFillColor(245, 247, 250);
       doc.roundedRect(14, 22, 269, 18, 2, 2, 'FD');
 
       doc.setFontSize(9);
-      
-      // Total Seharusnya Ada
+
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(30, 41, 59);
       doc.text('TOTAL SEHARUSNYA (KAS):', 20, 29);
       doc.setFont('helvetica', 'normal');
       doc.text(`Rp ${rawData.summary.totalSeharusnyaAda.toLocaleString('id-ID')}`, 20, 35);
 
-      // Sudah Diserahkan
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(16, 185, 129); // Emerald
+      doc.setTextColor(16, 185, 129);
       doc.text('SUDAH DISERAHKAN KE BENDAHARA:', 100, 29);
       doc.setFont('helvetica', 'normal');
       doc.text(`Rp ${rawData.summary.totalSudahDiserahkan.toLocaleString('id-ID')}`, 100, 35);
 
-      // Belum Diserahkan
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(225, 29, 72); // Rose / Red
+      doc.setTextColor(225, 29, 72);
       doc.text('MASIH DI TANGAN PETUGAS:', 190, 29);
       doc.setFont('helvetica', 'normal');
       doc.text(`Rp ${rawData.summary.totalBelumDiserahkan.toLocaleString('id-ID')}`, 190, 35);
 
-      doc.setTextColor(0, 0, 0); // Reset color
+      doc.setTextColor(0, 0, 0);
 
-      // --- TABEL UTAMA (PEMBAYARAN WARGA) ---
       const tableHeaders = [
         'No',
         'Penanggung Jawab (Kepala KK)',
@@ -395,7 +392,6 @@ export default function MasterIuranPage() {
         alternateRowStyles: { fillColor: [248, 250, 252] }
       });
 
-      // --- TABEL REKAP PETUGAS ---
       const finalY = (doc as any).lastAutoTable.finalY || 100;
       if (finalY > 150) {
         doc.addPage();
@@ -408,10 +404,10 @@ export default function MasterIuranPage() {
       doc.text('REKAPITULASI POSISI UANG PER PETUGAS', 14, startYPetugas - 4);
 
       const petugasHeaders = [
-        'No', 
-        'Nama Petugas / Pengambil Iuran', 
-        'Total Terkumpul', 
-        'Sudah Diserahkan', 
+        'No',
+        'Nama Petugas / Pengambil Iuran',
+        'Total Terkumpul',
+        'Sudah Diserahkan',
         'Masih di Tangan Petugas'
       ];
       const petugasBody = rawData.rekapPetugasRows.map((rp: any) => [
@@ -456,7 +452,7 @@ export default function MasterIuranPage() {
   const handleOpenModal = (item?: MasterIuranItem) => {
     if (item) {
       setEditId(item.id);
-      
+
       const existingKelas = Array.isArray(item.kelas_iuran) ? item.kelas_iuran : [];
       const mergedKelas = ['A', 'B', 'C'].map((label) => {
         const found = existingKelas.find((k) => k.nama_kelas === label);
@@ -474,7 +470,10 @@ export default function MasterIuranPage() {
         min_usia: item.min_usia !== null && item.min_usia !== undefined ? String(item.min_usia) : '',
         max_usia: item.max_usia !== null && item.max_usia !== undefined ? String(item.max_usia) : '',
         wajib_bekerja: item.wajib_bekerja ?? false,
-        kelas_iuran: mergedKelas
+        kelas_iuran: mergedKelas,
+        tipe_fee: item.tipe_fee || 'none',
+        persen_fee_petugas: item.persen_fee_petugas ? String(item.persen_fee_petugas) : '',
+        nominal_fee_petugas: item.nominal_fee_petugas ? String(item.nominal_fee_petugas) : ''
       });
     } else {
       setEditId(null);
@@ -490,7 +489,10 @@ export default function MasterIuranPage() {
           { nama_kelas: 'A', nominal: 0 },
           { nama_kelas: 'B', nominal: 0 },
           { nama_kelas: 'C', nominal: 0 }
-        ]
+        ],
+        tipe_fee: 'none',
+        persen_fee_petugas: '',
+        nominal_fee_petugas: ''
       });
     }
     setIsModalOpen(true);
@@ -515,7 +517,10 @@ export default function MasterIuranPage() {
         min_usia: formData.min_usia !== '' ? parseInt(formData.min_usia) : null,
         max_usia: formData.max_usia !== '' ? parseInt(formData.max_usia) : null,
         wajib_bekerja: formData.wajib_bekerja,
-        kelas_iuran: formData.kelas_iuran
+        kelas_iuran: formData.kelas_iuran,
+        tipe_fee: formData.tipe_fee,
+        persen_fee_petugas: formData.tipe_fee === 'persen' && formData.persen_fee_petugas ? parseFloat(formData.persen_fee_petugas) : 0,
+        nominal_fee_petugas: formData.tipe_fee === 'nominal' && formData.nominal_fee_petugas ? parseFloat(formData.nominal_fee_petugas) : 0
       };
 
       if (editId) {
@@ -638,15 +643,13 @@ export default function MasterIuranPage() {
           {filteredList.map((item) => (
             <div
               key={item.id}
-              className={`bg-white rounded-2xl p-4 border transition-all shadow-sm flex flex-col justify-between space-y-3 ${
-                item.is_active ? 'border-slate-100' : 'border-slate-200 opacity-60 bg-slate-50/50'
-              }`}
+              className={`bg-white rounded-2xl p-4 border transition-all shadow-sm flex flex-col justify-between space-y-3 ${item.is_active ? 'border-slate-100' : 'border-slate-200 opacity-60 bg-slate-50/50'
+                }`}
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-2.5">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                    item.is_active ? 'bg-sky-50 text-sky-600' : 'bg-slate-200 text-slate-500'
-                  }`}>
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${item.is_active ? 'bg-sky-50 text-sky-600' : 'bg-slate-200 text-slate-500'
+                    }`}>
                     <Coins className="w-5 h-5" />
                   </div>
                   <div>
@@ -676,16 +679,35 @@ export default function MasterIuranPage() {
                 </div>
               </div>
 
-              {/* Tag Kriteria & Syarat */}
+              {/* Tag Kriteria & Syarat + Fee Badge */}
               <div className="flex flex-wrap gap-1.5 text-[10px]">
+                {/* Badge Fee Petugas */}
+                {item.tipe_fee === 'persen' && (
+                  <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-800 font-bold rounded-md border border-amber-200/60">
+                    <Percent className="w-3 h-3 text-amber-600" />
+                    Fee Petugas: {item.persen_fee_petugas}%
+                  </span>
+                )}
+                {item.tipe_fee === 'nominal' && (
+                  <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-800 font-bold rounded-md border border-emerald-200/60">
+                    <Banknote className="w-3 h-3 text-emerald-600" />
+                    Fee Petugas: Rp {item.nominal_fee_petugas?.toLocaleString('id-ID')}
+                  </span>
+                )}
+                {(!item.tipe_fee || item.tipe_fee === 'none') && (
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-500 font-medium rounded-md">
+                    Tanpa Fee Petugas
+                  </span>
+                )}
+
                 {(item.min_usia !== null && item.min_usia !== undefined) || (item.max_usia !== null && item.max_usia !== undefined) ? (
                   <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 font-medium rounded-md border border-amber-200/60">
                     <UserCheck className="w-3 h-3 text-amber-600" />
-                    {item.min_usia && item.max_usia 
+                    {item.min_usia && item.max_usia
                       ? `Usia: ${item.min_usia} - ${item.max_usia} Thn`
-                      : item.min_usia 
-                      ? `Min Usia: ${item.min_usia} Thn`
-                      : `Max Usia: ${item.max_usia} Thn`
+                      : item.min_usia
+                        ? `Min Usia: ${item.min_usia} Thn`
+                        : `Max Usia: ${item.max_usia} Thn`
                     }
                   </span>
                 ) : (
@@ -721,13 +743,12 @@ export default function MasterIuranPage() {
                     return (
                       <div
                         key={kelasKey}
-                        className={`p-1.5 rounded-lg border text-center flex flex-col justify-center ${
-                          kelasKey === 'A'
+                        className={`p-1.5 rounded-lg border text-center flex flex-col justify-center ${kelasKey === 'A'
                             ? 'bg-purple-50/60 border-purple-200 text-purple-900'
                             : kelasKey === 'B'
-                            ? 'bg-blue-50/60 border-blue-200 text-blue-900'
-                            : 'bg-slate-100/70 border-slate-200 text-slate-800'
-                        }`}
+                              ? 'bg-blue-50/60 border-blue-200 text-blue-900'
+                              : 'bg-slate-100/70 border-slate-200 text-slate-800'
+                          }`}
                       >
                         <span className="text-[9px] font-bold flex items-center justify-center gap-0.5">
                           {kelasKey === 'A' && <Crown className="w-2.5 h-2.5 text-amber-600" />}
@@ -745,7 +766,7 @@ export default function MasterIuranPage() {
               {/* Status Wilayah & Active Badge */}
               <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px]">
                 <span className="text-slate-500">
-                  {item.wilayah_rt_rw 
+                  {item.wilayah_rt_rw
                     ? `Wilayah: RT ${item.wilayah_rt_rw.rt} / RW ${item.wilayah_rt_rw.rw}`
                     : 'Semua Wilayah (Umum)'
                   }
@@ -754,11 +775,10 @@ export default function MasterIuranPage() {
                 <button
                   type="button"
                   onClick={() => handleToggleActive(item)}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold transition-all ${
-                    item.is_active
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold transition-all ${item.is_active
                       ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
                       : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                  }`}
+                    }`}
                 >
                   {item.is_active ? (
                     <>
@@ -783,7 +803,7 @@ export default function MasterIuranPage() {
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex justify-center items-end sm:items-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl pb-8 sm:pb-5">
-            
+
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 sticky top-0 bg-white z-10">
               <h3 className="text-sm font-bold text-slate-800">
@@ -800,7 +820,7 @@ export default function MasterIuranPage() {
 
             {/* Modal Form */}
             <form id="master-iuran-form" onSubmit={handleSubmit} className="space-y-4 text-xs">
-              
+
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">
                   Nama Iuran *
@@ -840,7 +860,92 @@ export default function MasterIuranPage() {
                 />
               </div>
 
-              {/* 1. SECTION: TARIF BERDASARKAN PILIHAN IURAN WARGA (A / B / C) */}
+              {/* SECTION BARU: FEEOPSIONAL / KOMISI PETUGAS PENAGIH */}
+              <div className="bg-amber-50/50 p-3.5 rounded-2xl border border-amber-200/80 space-y-3">
+                <div>
+                  <span className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5">
+                    <Gift className="w-4 h-4 text-amber-600" /> Fee / Komisi Petugas Penagih
+                  </span>
+                  <p className="text-[10px] text-amber-700/90 mt-0.5">
+                    Pengaturan komisi insentif untuk petugas yang menagih iuran ini.
+                  </p>
+                </div>
+
+                {/* Radio Pilihan Tipe Fee */}
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, tipe_fee: 'none' })}
+                    className={`py-2 px-2.5 rounded-xl text-[11px] font-bold border transition-all ${formData.tipe_fee === 'none'
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                  >
+                    Tanpa Fee
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, tipe_fee: 'persen' })}
+                    className={`py-2 px-2.5 rounded-xl text-[11px] font-bold border transition-all flex items-center justify-center gap-1 ${formData.tipe_fee === 'persen'
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                  >
+                    <Percent className="w-3.5 h-3.5" /> Persen (%)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, tipe_fee: 'nominal' })}
+                    className={`py-2 px-2.5 rounded-xl text-[11px] font-bold border transition-all flex items-center justify-center gap-1 ${formData.tipe_fee === 'nominal'
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                  >
+                    <Banknote className="w-3.5 h-3.5" /> Flat (Rp)
+                  </button>
+                </div>
+
+                {/* Input Sesuai Tipe Fee */}
+                {formData.tipe_fee === 'persen' && (
+                  <div className="bg-white p-2.5 rounded-xl border border-amber-200 space-y-1">
+                    <label className="block text-[10px] font-bold text-amber-900">
+                      Persentase Fee (%) *
+                    </label>
+                    <div className="relative flex items-center">
+                      <input
+                        type="number"
+                        step="0.01"
+                        required
+                        placeholder="Contoh: 5 (artinya 5%)"
+                        value={formData.persen_fee_petugas}
+                        onChange={(e) => setFormData({ ...formData, persen_fee_petugas: e.target.value })}
+                        className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-amber-900 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                      />
+                      <span className="absolute right-3 font-bold text-slate-400">%</span>
+                    </div>
+                  </div>
+                )}
+
+                {formData.tipe_fee === 'nominal' && (
+                  <div className="bg-white p-2.5 rounded-xl border border-amber-200 space-y-1">
+                    <label className="block text-[10px] font-bold text-amber-900">
+                      Nominal Fee per Transaksi (Rp) *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      placeholder="Contoh: 2000"
+                      value={formData.nominal_fee_petugas}
+                      onChange={(e) => setFormData({ ...formData, nominal_fee_petugas: e.target.value })}
+                      className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-emerald-600 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION: TARIF BERDASARKAN PILIHAN IURAN WARGA (A / B / C) */}
               <div className="bg-purple-50/50 p-3.5 rounded-2xl border border-purple-100 space-y-3">
                 <div>
                   <span className="text-[11px] font-bold text-purple-900 flex items-center gap-1">
@@ -855,13 +960,12 @@ export default function MasterIuranPage() {
                   {formData.kelas_iuran.map((k) => (
                     <div
                       key={k.nama_kelas}
-                      className={`p-2.5 rounded-xl border bg-white space-y-1 ${
-                        k.nama_kelas === 'A'
+                      className={`p-2.5 rounded-xl border bg-white space-y-1 ${k.nama_kelas === 'A'
                           ? 'border-purple-200'
                           : k.nama_kelas === 'B'
-                          ? 'border-blue-200'
-                          : 'border-slate-200'
-                      }`}
+                            ? 'border-blue-200'
+                            : 'border-slate-200'
+                        }`}
                     >
                       <label className="block text-[10px] font-bold text-slate-700 flex items-center justify-between">
                         <span>Pilihan {k.nama_kelas}</span>
@@ -880,13 +984,12 @@ export default function MasterIuranPage() {
                 </div>
               </div>
 
-              {/* 2 & 3. SECTION: KRITERIA USIA & WARGA BEKERJA */}
+              {/* SECTION: KRITERIA USIA & WARGA BEKERJA */}
               <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/60 space-y-3">
                 <span className="text-[11px] font-bold text-slate-700 block">
                   Kriteria Wajib Iuran (Aturan Pembebasan)
                 </span>
 
-                {/* 2. Batas Usia Minimal & Maksimal */}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-[10px] font-semibold text-slate-600 mb-1">
@@ -918,7 +1021,6 @@ export default function MasterIuranPage() {
                   *Jika kosong, berlaku umum untuk semua rentang usia.
                 </p>
 
-                {/* 3. Status Warga Sedang Bekerja */}
                 <div className="flex items-center justify-between pt-1 border-t border-slate-200/50">
                   <div>
                     <span className="text-[10px] font-semibold text-slate-600 block">
@@ -931,20 +1033,18 @@ export default function MasterIuranPage() {
                   <button
                     type="button"
                     onClick={() => setFormData({ ...formData, wajib_bekerja: !formData.wajib_bekerja })}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${
-                      formData.wajib_bekerja ? 'bg-sky-600' : 'bg-slate-300'
-                    }`}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${formData.wajib_bekerja ? 'bg-sky-600' : 'bg-slate-300'
+                      }`}
                   >
                     <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        formData.wajib_bekerja ? 'translate-x-6' : 'translate-x-1'
-                      }`}
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${formData.wajib_bekerja ? 'translate-x-6' : 'translate-x-1'
+                        }`}
                     />
                   </button>
                 </div>
               </div>
 
-              {/* 4. WILAYAH SPESIFIK */}
+              {/* WILAYAH SPESIFIK */}
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">
                   Wilayah Spesifik (Opsional)
@@ -963,20 +1063,18 @@ export default function MasterIuranPage() {
                 </select>
               </div>
 
-              {/* 5. STATUS AKTIF / NONAKTIF */}
+              {/* STATUS AKTIF / NONAKTIF */}
               <div className="flex items-center justify-between pt-2">
                 <span className="text-[11px] font-semibold text-slate-600">Status Aktifkan Iuran:</span>
                 <button
                   type="button"
                   onClick={() => setFormData({ ...formData, is_active: !formData.is_active })}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                    formData.is_active ? 'bg-sky-600' : 'bg-slate-300'
-                  }`}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${formData.is_active ? 'bg-sky-600' : 'bg-slate-300'
+                    }`}
                 >
                   <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      formData.is_active ? 'translate-x-6' : 'translate-x-1'
-                    }`}
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${formData.is_active ? 'translate-x-6' : 'translate-x-1'
+                      }`}
                   />
                 </button>
               </div>

@@ -6,7 +6,6 @@ import React, { useEffect, useState, useCallback, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { 
-  User, 
   Mail, 
   ShieldCheck, 
   LogOut, 
@@ -14,7 +13,11 @@ import {
   Loader2, 
   Receipt, 
   Wallet, 
-  ChevronRight
+  ChevronRight,
+  Coins,
+  CheckCircle2,
+  Clock,
+  CircleDollarSign
 } from 'lucide-react';
 
 function AkunPetugasContent() {
@@ -30,27 +33,26 @@ function AkunPetugasContent() {
     email: string;
     namaLengkap: string;
     jabatan: string;
-    rw: string;
-    rt: string;
   }>({
     email: '',
-    namaLengkap: '',
-    jabatan: 'Petugas Lapangan',
-    rw: '-',
-    rt: '-'
+    namaLengkap: 'Petugas Lapangan',
+    jabatan: 'Petugas Lapangan / Penagih'
   });
 
-  // Stats State
+  // Stats Transaksi & Komisi State
   const [stats, setStats] = useState({
     totalTransaksi: 0,
     totalNominal: 0,
+    totalKomisi: 0,
+    komisiDicairkan: 0,
+    komisiPending: 0,
   });
 
   // State Change Password
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [newPassword, setNewPassword] = useState('');
 
-  // 1. Fetch Profile & Stats Transaksi Khusus Petugas Ini
+  // 1. Fetch Profile, Stats Transaksi & Komisi Khusus Petugas Ini
   const fetchProfileAndStats = useCallback(async () => {
     setLoading(true);
     try {
@@ -64,36 +66,77 @@ function AkunPetugasContent() {
       // Fetch Detail Profil Pengurus
       const { data: profile } = await supabase
         .from('profil_pengurus')
-        .select('nama_lengkap, id_jabatan, id_wilayah')
+        .select('nama_lengkap, role')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
 
       setUserInfo({
         email: user.email || '-',
-        namaLengkap: profile?.nama_lengkap || user.user_metadata?.full_name || 'Petugas Lapangan',
-        jabatan: 'Petugas Lapangan / Penagih',
-        rw: '-',
-        rt: '-'
+        namaLengkap: profile?.nama_lengkap || user.user_metadata?.full_name || user.user_metadata?.nama_lengkap || 'Anwar',
+        jabatan: 'Petugas Lapangan / Penagih'
       });
 
-      // Fetch Stats Transaksi yang HANYA dicatat oleh Petugas Ini (pencatat_by_id)
+      // Fetch Transaksi & Join dengan master_iuran
       const { data: transaksi, error } = await supabase
         .from('pembayaran_iuran')
-        .select('jumlah_bayar')
-        .eq('pencatat_by_id', user.id);
+        .select(`
+          jumlah_bayar, 
+          nominal_komisi, 
+          status_komisi, 
+          id_iuran, 
+          master_iuran (
+            tipe_fee, 
+            persen_fee_petugas, 
+            nominal_fee_petugas
+          )
+        `)
+        .or(`pencatat_by_id.eq.${user.id},petugas_id.eq.${user.id}`);
 
       if (error) throw error;
 
       if (transaksi) {
         const totalCount = transaksi.length;
         const totalAmount = transaksi.reduce((acc, curr) => acc + Number(curr.jumlah_bayar || 0), 0);
+        
+        let totalKomisi = 0;
+        let komisiDicairkan = 0;
+        let komisiPending = 0;
+
+        transaksi.forEach((item: any) => {
+          let komisi = Number(item.nominal_komisi || 0);
+
+          // Fallback kalkulasi jika nominal_komisi di pembayaran_iuran belum terisi/masih 0
+          if (komisi === 0 && item.master_iuran) {
+            const m = item.master_iuran;
+            if (m.tipe_fee === 'persen' || Number(m.persen_fee_petugas) > 0) {
+              komisi = (Number(item.jumlah_bayar || 0) * Number(m.persen_fee_petugas || 0)) / 100;
+            } else if (m.tipe_fee === 'nominal' || Number(m.nominal_fee_petugas) > 0) {
+              komisi = Number(m.nominal_fee_petugas || 0);
+            }
+          }
+
+          totalKomisi += komisi;
+
+          const status = (item.status_komisi || '').toLowerCase();
+          const isCair = status === 'cair' || status === 'dicairkan' || status === 'sudah_cair';
+          
+          if (isCair) {
+            komisiDicairkan += komisi;
+          } else {
+            komisiPending += komisi;
+          }
+        });
+
         setStats({
           totalTransaksi: totalCount,
-          totalNominal: totalAmount
+          totalNominal: totalAmount,
+          totalKomisi,
+          komisiDicairkan,
+          komisiPending,
         });
       }
     } catch (err: any) {
-      console.error('Gagal memuat profil:', err.message);
+      console.error('Gagal memuat profil & komisi:', err.message);
     } finally {
       setLoading(false);
     }
@@ -152,7 +195,7 @@ function AkunPetugasContent() {
   }
 
   return (
-    <div className="space-y-4 max-w-md mx-auto">
+    <div className="space-y-4 max-w-md mx-auto pb-6">
       {/* Header Profile Card */}
       <div className="bg-gradient-to-br from-teal-700 to-emerald-800 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden">
         <div className="absolute -right-6 -bottom-6 w-32 h-32 bg-white/10 rounded-full blur-2xl pointer-events-none" />
@@ -175,7 +218,7 @@ function AkunPetugasContent() {
         </div>
       </div>
 
-      {/* Ringkasan Performa Penagihan (Sesuai Petugas Login) */}
+      {/* Ringkasan Performa Penagihan */}
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-white border border-slate-100 rounded-2xl p-3.5 shadow-sm flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
@@ -195,6 +238,59 @@ function AkunPetugasContent() {
             <p className="text-[10px] text-slate-400 font-medium">Total Terkumpul</p>
             <p className="text-xs font-bold text-teal-700">
               Rp {stats.totalNominal.toLocaleString('id-ID')}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Card Detail Komisi Petugas */}
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+              <Coins className="w-4 h-4" />
+            </div>
+            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              Informasi Komisi
+            </h3>
+          </div>
+          <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">
+            Petugas
+          </span>
+        </div>
+
+        {/* Total Komisi Hak Petugas */}
+        <div className="bg-amber-50/60 rounded-xl p-3 border border-amber-100/80 flex items-center justify-between">
+          <div>
+            <p className="text-[10px] text-amber-700 font-medium">Total Perolehan Komisi</p>
+            <p className="text-base font-extrabold text-amber-900 mt-0.5">
+              Rp {stats.totalKomisi.toLocaleString('id-ID')}
+            </p>
+          </div>
+          <CircleDollarSign className="w-8 h-8 text-amber-400 opacity-60" />
+        </div>
+
+        {/* Breakdown Pencairan Komisi */}
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          {/* Sudah Dicairkan */}
+          <div className="bg-emerald-50/50 border border-emerald-100 rounded-xl p-2.5">
+            <div className="flex items-center gap-1.5 text-emerald-700 mb-1">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-semibold">Sudah Dicairkan</span>
+            </div>
+            <p className="text-xs font-bold text-emerald-800">
+              Rp {stats.komisiDicairkan.toLocaleString('id-ID')}
+            </p>
+          </div>
+
+          {/* Belum Dicairkan (Pending) */}
+          <div className="bg-orange-50/50 border border-orange-100 rounded-xl p-2.5">
+            <div className="flex items-center gap-1.5 text-orange-600 mb-1">
+              <Clock className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-semibold">Belum Dicairkan</span>
+            </div>
+            <p className="text-xs font-bold text-orange-700">
+              Rp {stats.komisiPending.toLocaleString('id-ID')}
             </p>
           </div>
         </div>
