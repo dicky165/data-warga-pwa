@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Megaphone, Plus, Pin, Loader2, Calendar, Tag, Trash2 } from 'lucide-react';
+import { Megaphone, Plus, Pin, Loader2, Calendar, Trash2, Paperclip, FileText, Image as ImageIcon, ExternalLink, X } from 'lucide-react';
 
 interface Pengumuman {
   id: number;
@@ -11,6 +11,8 @@ interface Pengumuman {
   kategori: string;
   pinned: boolean;
   rw: string;
+  lampiran_url?: string | null;
+  lampiran_type?: string | null; // 'image' | 'pdf'
   created_at: string;
   profil_pengurus?: {
     nama_lengkap: string;
@@ -29,6 +31,13 @@ export default function PengumumanPage() {
   const [kategori, setKategori] = useState('Informasi');
   const [pinned, setPinned] = useState(false);
   const [rw, setRw] = useState('010');
+  
+  // File State
+  const [fileLampiran, setFileLampiran] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  // Modal Image Preview State
+  const [activeImageModal, setActiveImageModal] = useState<string | null>(null);
 
   const supabase = createClient();
 
@@ -57,13 +66,56 @@ export default function PengumumanPage() {
     fetchPengumuman();
   }, []);
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const selectedFile = e.target.files[0];
+      setFileLampiran(selectedFile);
+
+      if (selectedFile.type.startsWith('image/')) {
+        setPreviewUrl(URL.createObjectURL(selectedFile));
+      } else {
+        setPreviewUrl(null);
+      }
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // 1. Verifikasi Authentication User
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
 
+      if (authError || !user) {
+        throw new Error('Sesi login Anda telah berakhir. Silakan re-login terlebih dahulu.');
+      }
+
+      let uploadedLampiranUrl = null;
+      let uploadedLampiranType = null;
+
+      // 2. Upload File Lampiran jika ada
+      if (fileLampiran) {
+        const fileExt = fileLampiran.name.split('.').pop();
+        const fileName = `pengumuman_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('lampiran-pengumuman')
+          .upload(fileName, fileLampiran);
+
+        if (uploadError) {
+          throw new Error(`Gagal mengunggah lampiran: ${uploadError.message}`);
+        }
+
+        const { data: publicUrlData } = supabase.storage
+          .from('lampiran-pengumuman')
+          .getPublicUrl(fileName);
+
+        uploadedLampiranUrl = publicUrlData.publicUrl;
+        uploadedLampiranType = fileLampiran.type.startsWith('image/') ? 'image' : 'pdf';
+      }
+
+      // 3. Insert Pengumuman dengan User ID yang Terverifikasi
       const { error } = await supabase.from('pengumuman').insert([
         {
           judul,
@@ -71,17 +123,27 @@ export default function PengumumanPage() {
           kategori,
           pinned,
           rw,
-          penulis_by_id: user?.id,
+          lampiran_url: uploadedLampiranUrl,
+          lampiran_type: uploadedLampiranType,
+          penulis_by_id: user.id, // Dipastikan bernilai UUID terautentikasi
         },
       ]);
 
-      if (error) throw error;
+      if (error) {
+        // Penanganan jika ID user belum terdaftar di tabel profil_pengurus
+        if (error.code === '23503') {
+          throw new Error('Akun Anda belum terdaftar di profil pengurus. Silakan hubungi admin.');
+        }
+        throw error;
+      }
 
       // Reset form
       setJudul('');
       setIsi('');
       setKategori('Informasi');
       setPinned(false);
+      setFileLampiran(null);
+      setPreviewUrl(null);
       setShowForm(false);
       
       // Refresh list
@@ -147,7 +209,7 @@ export default function PengumumanPage() {
 
           <div className="space-y-3">
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Judul Pengumuman</label>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Judul Pengumuman *</label>
               <input
                 type="text"
                 required
@@ -184,7 +246,7 @@ export default function PengumumanPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Isi Pengumuman</label>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Isi Pengumuman *</label>
               <textarea
                 required
                 rows={4}
@@ -193,6 +255,41 @@ export default function PengumumanPage() {
                 placeholder="Tuliskan detail pengumuman secara lengkap..."
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500"
               />
+            </div>
+
+            {/* Input File Lampiran */}
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Sematkan Foto / Surat Edaran (PDF/Gambar)</label>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 text-slate-600 text-xs font-medium">
+                  <Paperclip className="w-4 h-4 text-sky-600" />
+                  <span>{fileLampiran ? fileLampiran.name : 'Pilih File (JPG, PNG, PDF)'}</span>
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                </label>
+                {fileLampiran && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFileLampiran(null);
+                      setPreviewUrl(null);
+                    }}
+                    className="text-xs text-rose-600 hover:underline"
+                  >
+                    Hapus
+                  </button>
+                )}
+              </div>
+
+              {previewUrl && (
+                <div className="mt-2 h-32 w-32 rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+                  <img src={previewUrl} alt="Preview" className="w-full h-full object-cover" />
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2 pt-1">
@@ -236,7 +333,7 @@ export default function PengumumanPage() {
           {list.map((item) => (
             <div
               key={item.id}
-              className={`p-4 bg-white rounded-2xl border shadow-sm transition-all space-y-2 ${
+              className={`p-4 bg-white rounded-2xl border shadow-sm transition-all space-y-3 ${
                 item.pinned ? 'border-amber-300 bg-amber-50/20' : 'border-slate-100'
               }`}
             >
@@ -270,6 +367,39 @@ export default function PengumumanPage() {
               <h3 className="text-sm font-bold text-slate-800">{item.judul}</h3>
               <p className="text-xs text-slate-600 whitespace-pre-line leading-relaxed">{item.isi}</p>
 
+              {/* Tampilan Lampiran jika ada */}
+              {item.lampiran_url && (
+                <div className="pt-2">
+                  {item.lampiran_type === 'image' || item.lampiran_url.match(/\.(jpeg|jpg|gif|png|webp)/i) ? (
+                    <div 
+                      onClick={() => setActiveImageModal(item.lampiran_url!)}
+                      className="group relative cursor-pointer overflow-hidden rounded-xl border border-slate-200 max-h-60 bg-slate-100 w-full"
+                    >
+                      <img 
+                        src={item.lampiran_url} 
+                        alt={item.judul} 
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
+                      />
+                      <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-1">
+                        <ImageIcon className="w-4 h-4" />
+                        <span>Klik untuk memperbesar</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <a
+                      href={item.lampiran_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 p-2.5 bg-sky-50 text-sky-700 hover:bg-sky-100 rounded-xl text-xs font-semibold border border-sky-100 transition-colors"
+                    >
+                      <FileText className="w-4 h-4 text-sky-600" />
+                      <span>Lihat Lampiran Dokumen / PDF</span>
+                      <ExternalLink className="w-3.5 h-3.5 ml-1" />
+                    </a>
+                  )}
+                </div>
+              )}
+
               <div className="flex items-center justify-between text-[10px] text-slate-400 pt-2 border-t border-slate-50">
                 <span>Penulis: {item.profil_pengurus?.nama_lengkap || 'Pengurus'}</span>
                 <span className="flex items-center gap-1">
@@ -283,6 +413,28 @@ export default function PengumumanPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Modal Lightbox untuk Perbesar Gambar */}
+      {activeImageModal && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm"
+          onClick={() => setActiveImageModal(null)}
+        >
+          <div className="relative max-w-3xl max-h-[90vh] w-full flex flex-col items-center">
+            <button 
+              onClick={() => setActiveImageModal(null)}
+              className="absolute -top-10 right-0 p-2 text-white hover:text-slate-300"
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <img 
+              src={activeImageModal} 
+              alt="Gambar Pengumuman" 
+              className="max-h-[85vh] object-contain rounded-xl shadow-2xl"
+            />
+          </div>
         </div>
       )}
     </div>
